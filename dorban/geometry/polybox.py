@@ -4,6 +4,7 @@ a Cartesian grids.
 This also can be used to model multiplicative systems in non euclidean geometries
 """
 
+from functools import cached_property
 from typing import List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -71,6 +72,14 @@ class PolyBox(FiniteGeometry):
          left, right, back, forward, down, up
         """
         return self.lengths[cell][face // 2] / 2
+
+    def face_distances(self) -> np.array:
+        """The distances from the center of each cell to its faces, an array of shape cells x faces."""
+        return np.repeat(np.asarray(self.lengths, dtype=float) / 2, 2, axis=1)
+
+    def face_areas(self) -> np.array:
+        """The areas of the faces of each cell, an array of shape cells x faces."""
+        return np.repeat(self.volumes[:, None] / np.asarray(self.lengths, dtype=float), 2, axis=1)
 
     def opposite_face(self, face: int) -> int:
         """
@@ -293,6 +302,10 @@ class Box:
         self.x, self.y, self.z = 1, 1, 1
         for ax, size in zip(axises, sizes):
             self.__setattr__(ax, size)
+        # on_face[face][cell]: whether the cell is on that face of the box
+        self.on_face = np.zeros((2 * self.dim, self.cells), dtype=bool)
+        for face, cells in enumerate(self.boundaries):
+            self.on_face[face, cells] = True
         self.neighbors: Sequence[Sequence[Neighbor]] = [
             self.correct_neighbors_of_boundary_cell(self.inside_neighbors(cell), cell) for cell in range(self.cells)
         ]
@@ -314,7 +327,7 @@ class Box:
         parts = ([cell - 1, cell + 1], [cell - self.x, cell + self.x], [cell - self.x * self.y, cell + self.x * self.y])
         return np.hstack(parts[: self.dim])
 
-    @property
+    @cached_property
     def boundaries(self) -> Sequence[Sequence[int]]:
         """
         computes the boundaries of the box in each direction.
@@ -364,12 +377,12 @@ class Box:
         """
         if self.sizes_of_neighbors is not None:
             return [
-                neigh if cell not in self.boundaries[face] else (Boundary, self.neighbor_in_other_box(cell, face))
+                neigh if not self.on_face[face, cell] else (Boundary, self.neighbor_in_other_box(cell, face))
                 for face, neigh in enumerate(neighbors)
             ]
         else:
             return [
-                neigh if cell not in self.boundaries[face] else self.boundary_conditions[face]
+                neigh if not self.on_face[face, cell] else self.boundary_conditions[face]
                 for face, neigh in enumerate(neighbors)
             ]
 

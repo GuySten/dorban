@@ -31,6 +31,7 @@ from dorban.finite_differences.finite_difference_current_calculator import (
 from dorban.geometry import (
     Boundary as Boundary,
     Cartesian as Cartesian,
+    Cylindrical as Cylindrical,
     FiniteGeometry as FiniteGeometry,
     Reflector as Reflector,
     TriangularTessellation as TriangularTessellation,

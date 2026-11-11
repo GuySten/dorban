@@ -145,6 +145,22 @@ class TriangularTessellation(FiniteGeometry):
         """
         return _distance(face, self._z_distances[self._z_coordinates(cell)], self._distance_to_face_in_plane)
 
+    def face_distances(self) -> np.array:
+        """The distances from the center of each cell to its faces, an array of shape cells x faces."""
+        z = np.arange(self.cells) // self.tri
+        in_plane = np.full((self.cells, 3), self._distance_to_face_in_plane)
+        if self.dim == 2:
+            return in_plane
+        return np.hstack([in_plane, np.repeat(self._z_distances[z][:, None], 2, axis=1)])
+
+    def face_areas(self) -> np.array:
+        """The areas of the faces of each cell, an array of shape cells x faces."""
+        z = np.arange(self.cells) // self.tri
+        in_plane = np.repeat(self._z_areas[z][:, None], 3, axis=1)
+        if self.dim == 2:
+            return in_plane
+        return np.hstack([in_plane, np.full((self.cells, 2), self._triangle_area)])
+
     def opposite_face(self, face: int) -> int:
         """
         Method to compute the number of the face of the cell who is adjacent to

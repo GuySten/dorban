@@ -2,6 +2,7 @@
 This module contains the solver of the equation.
 """
 
+from functools import partial
 from typing import Callable
 
 import numpy as np
@@ -33,7 +34,8 @@ def fixed_source(system: Core, source: np.array, solver: Callable = la.lgmres, *
      object that represents the system
     source: np.array
      array that represents the source. its shape should be (cells,E) and its
-     value at (i,e) is the source intensity in the i-th cell at energy group e
+     value at (i,e) is the source intensity in the i-th cell at energy group e,
+     that is the total source in the cell (the source density times the cell volume), not a density
     solver: Callable
         method to solve Ax=b, the default value is lgmres
     kwargs
@@ -57,8 +59,8 @@ def flux_with_given_boundary_current(system: Core, k: float, **kwargs) -> np.arr
     Parameters
     ----------
     system: Core
-        object that represents the system, the boundary conditions
-        should be KnownCurrent for this function to make sense
+        object that represents the system, the current through the boundary is given by KnownCurrent or
+        IncomingCurrent boundary conditions
     k: float
         the known eigenvalue
     kwargs
@@ -70,7 +72,7 @@ def flux_with_given_boundary_current(system: Core, k: float, **kwargs) -> np.arr
     """
     fission = 1 / k * fd.cmfd_fission(system)
     absorber = diffusion_matrix(system.geometry, system.E, system.current_calc) + fd.cmfd_absorption(system)
-    current = fd.boundary_current(system.geometry, system.E)
+    current = fd.boundary_current(system.geometry, system.E, system.current_calc)
     flux = la.bicgstab(absorber - fission, current, **kwargs)[0]
     assert np.all(flux > 0), f"The flux wasn't strictly positive! {flux}"
     return flux
@@ -86,13 +88,33 @@ def _call_solver(core: Core, settings: Settings) -> tuple[float, np.array]:
     elif settings.solver_name == "arpack":
         solver = generalized_arnoldi
     elif settings.solver_name == "slepc":
-        solver = generalized_eigenvalue_slepc
+        # the unknowns are ordered by cell and then by energy group, which lets SLEPc solve group by group
+        solver = partial(generalized_eigenvalue_slepc, groups=core.E)
     else:
         raise ValueError(f"there is no eigenvsolver with the name {settings.solver_name}")
     if isinstance(settings, FDSettings):
-        return solve_k_fd(core, settings, solver)
+        k, flux = solve_k_fd(core, settings, solver)
+        _check_fundamental_mode(flux)
+        return k, flux
     else:
         raise NotImplementedError("The given settings have no solution implementation as of yet")
+
+
+def _check_fundamental_mode(flux: np.array, tolerance: float = 1e-3):
+    """
+    Raise if the flux changes sign. The fundamental mode is the only eigenvector of the diffusion
+    equation that does not change sign, so a flux with a significant negative part means the eigensolver
+    converged to another eigenvalue. Negative values smaller than tolerance times the largest absolute
+    value are accepted, as numerical noise where the flux is small.
+    """
+    scale = np.max(np.abs(flux))
+    if np.max(flux) < -np.min(flux):
+        flux = -flux
+    if np.min(flux) < -tolerance * scale:
+        raise RuntimeError(
+            "The eigensolver did not converge to the fundamental mode: the flux changes sign "
+            f"(smallest value {np.min(flux) / scale:.3g} of the largest). Try another solver_name."
+        )
 
 
 def _normalize_to_neutron_source(core: Core, k: float, flux: np.array) -> np.array:

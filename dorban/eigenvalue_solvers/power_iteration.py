@@ -42,7 +42,8 @@ def generalized_eigenvalue(
      eigenvector
     """
     k, v = last(source_iteration_generator(A, M, k0=k, v=v, **kwargs))
-    return float(k), v
+    # the sign of an eigenvector is arbitrary: return it with a positive sum
+    return float(k), v if np.sum(v) >= 0 else -v
 
 
 def source_iteration_generator(

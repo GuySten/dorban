@@ -8,10 +8,8 @@ from typing import Optional, Sequence
 import numba
 import numpy as np
 
-from dorban.geometry.boundary_conditions import Boundary
-from dorban.geometry.geometry import FiniteGeometry
+from dorban.geometry.geometry import FiniteGeometry, faces_between_original_cells
 from dorban.system import IsotopeData
-from dorban.utils import op_face
 
 
 class CMFDCurrentCalculator:
@@ -55,46 +53,9 @@ class CMFDCurrentCalculator:
         self.coupling = coupling if coupling is not None else np.zeros((dc.shape[0], 2 * dim, self.E))
         self.df = df if df is not None else np.ones_like(self.coupling)
 
-    def compute_current_coefficients(
-        self, cell: int, neighbor: int, face: int, distances: np.array, surface_areas: np.array
-    ) -> tuple[np.array, np.array, np.array]:
-        """
-        This method computes the coefficients in the diffusion matrix
-         that represents the current between a cell and its neighbor
-
-        Parameters
-        ----------
-        cell: int
-         the number of the cell
-        neighbor:int
-         the number of the neighbor
-        face: int
-         the number of the face between cell and neighbor
-        distances: np.array
-         array of shape cells*faces which contains the distances between the center of each cell to the boundaries.
-        surface_areas: np.array
-         array of shape cells*faces which contains the surface area of each face.
-
-        Returns
-        -------
-        Tuple[np.array, np.array, np.array]
-         tuple of the row indices in the diffusion matrix in which the coefficients
-         appear, the column indices in the diffusion matrix in which the coefficients
-         appear, the values of the diffusion matrix
-        """
-        return _compute(
-            cell,
-            self.E,
-            neighbor,
-            self.dc[cell],
-            self.dc[neighbor],
-            distances[cell, face],
-            distances[neighbor, face],
-            self.df[cell, face],
-            self.df[neighbor, op_face(face)],
-            surface_areas[cell, face],
-            self.coupling[cell, face],
-        )
+    def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> np.array:
+        """The diffusion coefficients of the cell across the face."""
+        return self.dc[cell]
 
     def mesh_refine(
         self,
@@ -122,15 +83,11 @@ class CMFDCurrentCalculator:
          new current calculator compatible with the refined geometry
         """
 
-        df = np.ones_like(geo.array_refine(self.df, split, axis=0))
-        coupling = np.zeros_like(geo.array_refine(self.coupling, split, axis=0))
-        assemblies = geo.array_refine(np.arange(0, stop=geo.cells), split).astype(int)
-        for cell, neighbors in enumerate(refgeo.neighbors):
-            for face, neighbor in enumerate(neighbors):
-                if not isinstance(neighbor, Boundary):
-                    if assemblies[cell] != assemblies[neighbor]:
-                        df[cell][face] = self.df[assemblies[cell]][face]
-                        coupling[cell][face] = self.coupling[assemblies[cell]][face]
+        # the faces between the original cells keep their discontinuity factors and coupling coefficients
+        assemblies, across = faces_between_original_cells(geo, split, refgeo)
+        across = across[:, :, None]
+        df = np.where(across, self.df[assemblies], 1.0)
+        coupling = np.where(across, self.coupling[assemblies], 0.0)
         return self.__class__(geo.array_refine(self.dc, split, axis=0), self.dim, coupling, df)
 
     @classmethod
@@ -163,14 +120,14 @@ class CMFDCurrentCalculator:
         return cls(dc, dim)
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _compute(cell, E, neighbor, D1, D2, l1, l2, df1, df2, surface_area, coupling_coefficient):
     row_indices = np.hstack((np.arange(cell * E, (cell + 1) * E), np.arange(cell * E, (cell + 1) * E)))
     col_indices = np.hstack((np.arange(neighbor * E, (neighbor + 1) * E), np.arange(cell * E, (cell + 1) * E)))
     return row_indices, col_indices, _values(D1, D2, l1, l2, df1, df2, surface_area, coupling_coefficient)
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _values(D1, D2, l1, l2, df1, df2, surface_area, coupling_coefficient):
     diff = D1 * D2 / (l2 * df2 * D1 + l1 * df1 * D2)
     values = surface_area * diff

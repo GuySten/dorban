@@ -17,6 +17,7 @@ def test_flux_with_given_boundary_current(CAR_2dim):
             if isinstance(neighbor, Boundary):
                 geo.neighbors[cell][face] = Void()
     k, flux = solve_k_diffusion(system, rtol_vector=1e-10, atol_vector=1e-10)
+    flux = flux * np.sign(np.sum(flux))  # the sign of an eigenvector is arbitrary
     for cell in range(geo.cells):
         for face, neighbor in enumerate(geo.neighbors[cell]):
             if isinstance(neighbor, Boundary):
@@ -26,10 +27,11 @@ def test_flux_with_given_boundary_current(CAR_2dim):
                 mat = spar.coo_matrix(
                     (val, (row, col)), shape=(system.size, system.size)
                 )
-                current = mat @ flux
-                current = current[np.nonzero(current)]
+                # the current leaving through the void boundary; KnownCurrent takes the current entering
+                outgoing = mat @ flux
+                outgoing = outgoing[np.nonzero(outgoing)]
                 geo.neighbors[cell][face] = KnownCurrent(
-                    current / system.geometry.surface_area(cell, face)
+                    -outgoing / system.geometry.surface_area(cell, face)
                 )
     flux2 = flux_with_given_boundary_current(system, k, rtol=1e-10, atol=1e-10)
     flux = flux / np.sum(flux)

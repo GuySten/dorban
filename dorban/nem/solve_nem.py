@@ -16,13 +16,15 @@ logger = logging.getLogger(__name__)
 
 class NEMSettings(Settings):
     """
-    settings for a NEM calculation
+    settings for a NEM calculation. split refines the cells into nodes, cmfd_iter is the number of CMFD iterations
+    between updates of the NEM coupling coefficients (see :class:`~dorban.nem.cmfd_iterator.GeneratorNemCMFD`),
+    and the other settings are those of :class:`~dorban.settings.Settings`.
     """
 
     def __init__(
         self,
         split=None,
-        cmfd_iter=0,
+        cmfd_iter=2,
         initial_flux: Optional[np.array] = None,
         initial_k: float = 1,
         k_tol: float = 1e-6,
@@ -112,6 +114,8 @@ def solve_source_nem(system: Core, settings: NEMSettings, source: np.array) -> n
     source: np.array
      The source is assumed to be constant within each node, energy group. The values of the source array
      are organized by energy group and the by cell, it is a one dimensional array of size cells x energy groups.
+     Each value is the total source in the node and energy group (the source density times the node volume),
+     not a density.
 
     Returns
     -------

@@ -12,23 +12,13 @@ import numpy as np
 
 from dorban.eigenvalue_solvers.slepc_methods import generalized_eigenvalue_slepc, solve_linear_petsc
 from dorban.finite_differences import cmfd_absorption, cmfd_fission
-from dorban.geometry.boundary_conditions import Boundary, Reflector, Void
+from dorban.geometry.boundary_conditions import Boundary, ExtrapolationLength, Reflector, Void, ZeroFlux
+from dorban.geometry.cylindrical import Cylindrical
 from dorban.materials import CrossSectionData
 from dorban.nem.cmfd_current_calculator import CMFDCurrentCalculator
 from dorban.nem.compiled_diffusion_matrix import diffusion_matrix
 from dorban.nem.leakage import leakage
-from dorban.nem.nem_coupling_rhs import nem_boundary_rhs, nem_rhs
-from dorban.nem.nem_matrices import nem_boundary_mat, nem_mat
-from dorban.nem.utils import (
-    boundary_coupling_coefficient,
-    cell_indices_in_two_cell_system,
-    cells_axi_energy_slice,
-    cells_axi_slice,
-    compute_coupling_coefficients,
-    current_from_poly_exp,
-    energy_slice,
-    other_axi,
-)
+from dorban.nem.two_node import boundary_coupling, two_node_coupling
 from dorban.system import Core
 from dorban.utils import op_face
 
@@ -36,11 +26,12 @@ logger = logging.getLogger(__name__)
 
 
 def boundary_conditions_numbering(boundary: Boundary) -> int:
-    """
+    r"""
     Function that assigns a negative number to any supported boundary condition type.
-    Currently only reflective and void boundary conditions are supported.
-    Void boundary condition is assigned the number -1.
+    Boundary conditions of the form :math:`J=\alpha\phi` at the boundary, Void and ExtrapolationLength, are assigned
+    the number -1; the value of :math:`\alpha` of each face is given by :func:`boundary_albedos`.
     Reflector boundary condition is assigned the number -2.
+    ZeroFlux boundary condition is assigned the number -3.
 
     Parameters
     ----------
@@ -51,11 +42,41 @@ def boundary_conditions_numbering(boundary: Boundary) -> int:
     -------
     int
     """
-    if isinstance(boundary, Void):
+    if isinstance(boundary, (Void, ExtrapolationLength)):
         return -1
     if isinstance(boundary, Reflector):
         return -2
+    if isinstance(boundary, ZeroFlux):
+        return -3
     raise NotImplementedError(f"The boundary condition of type {boundary} isn't implemented in the NEM kernel.")
+
+
+def boundary_albedos(neighbors: Iterable[Iterable[int | Boundary]]) -> np.array:
+    r"""
+    The albedo :math:`\alpha` of each face, in :math:`J=\alpha\phi` at the boundary: 0.5 for Void, the constant of
+    ExtrapolationLength, infinity for ZeroFlux and 0 for faces between cells and reflective faces.
+
+    Parameters
+    ----------
+    neighbors: Iterable[Iterable[int | Boundary]]
+     The neighbors of each cell, as given by the geometry.
+
+    Returns
+    -------
+    np.array
+     Array of shape cells x faces.
+    """
+
+    def albedo(neighbor) -> float:
+        if isinstance(neighbor, Void):
+            return 0.5
+        if isinstance(neighbor, ExtrapolationLength):
+            return neighbor.constant
+        if isinstance(neighbor, ZeroFlux):
+            return np.inf
+        return 0.0
+
+    return np.array([[albedo(neighbor) for neighbor in cell_neighbors] for cell_neighbors in neighbors], dtype=float)
 
 
 def change_neighbors(neighbors: Iterable[Iterable[int | Boundary]]) -> np.array:
@@ -133,8 +154,9 @@ class GeneratorNemCMFD:
     core: Core
         Core data. Note that only :class:`~.CMFDCurrentCalculator` are supported.
     cmfd_max_iter:int
-     The maximal number allowed of cmfd iterations without coefficients update. Default is 0,
-     meaning after each iteration the coupling coefficients are updated.
+     The maximal number of CMFD iterations without an update of the coupling coefficients. 0 updates them after
+     every iteration. The default, 2, gave the same eigenvalues (within 0.1 pcm) as 0 on the NEM benchmarks in about
+     60% of the time (IAEA3D: 14.4 s instead of 24.2 s): the NEM calculations are the expensive part.
     k: float
      guess for the top eigenvalue, if it is None a finite differences eigenvalue problem is solved at the first iteration.
     v: np.array
@@ -149,15 +171,15 @@ class GeneratorNemCMFD:
      Relative convergence for the linear solver.
     lin_atol: float
      Absolute convergence for the linear solver.
-    max-iter: float
-     Maximal number of CMFD iteration allowed.
+    max_iter: float
+     Maximal number of CMFD iterations allowed, a RuntimeError is raised if the iteration has not converged by then.
 
     """
 
     def __init__(
         self,
         core: Core,
-        cmfd_max_iter=0,
+        cmfd_max_iter=2,
         k: float = None,
         v: np.array = None,
         tol_value: float = 1e-10,
@@ -167,28 +189,33 @@ class GeneratorNemCMFD:
         lin_atol=1e-8,
         max_iter=np.inf,
     ):
+        if isinstance(core.geometry, Cylindrical):
+            raise NotImplementedError("NEM is only implemented for Cartesian geometry, use finite differences")
         self.core = core
         self.dim = core.geometry.dim
         self.current_calc: CMFDCurrentCalculator = core.current_calc  # type: ignore
-        self.distances = np.array(
-            [
-                [core.geometry.distance_to_face(cell, face) for face in range(2 * self.dim)]
-                for cell in range(core.geometry.cells)
-            ]
-        )
-        self.surface_areas = np.array(
-            [
-                [core.geometry.surface_area(cell, face) for face in range(2 * self.dim)]
-                for cell in range(core.geometry.cells)
-            ]
-        )
+        faces = 2 * self.dim
+        for name in ("coupling", "df"):
+            shape = getattr(self.current_calc, name).shape
+            if shape[:2] != (core.geometry.cells, faces):
+                # the compiled NEM code does not check bounds: a mismatch would corrupt memory
+                raise ValueError(
+                    f"The {name} array of the current calculator has shape {shape}, but the geometry has "
+                    f"{core.geometry.cells} cells with {faces} faces (was it created for another dimension?)"
+                )
+        self.distances = core.geometry.face_distances()
+        self.surface_areas = core.geometry.face_areas()
         self.neighbors = change_neighbors(core.geometry.neighbors)
+        self.albedos = boundary_albedos(core.geometry.neighbors)
         self.volumes = core.geometry.volumes
         self.materials_data = change_isotopes(core.isotopes, core.E)
         self.cmfd_max_iter = cmfd_max_iter
         self.max_iter = max_iter
         self.cmfd_iter = 0
         self.iter = 0
+        self.negative_flux_warned = False
+        # the eigenvalue and flux the coupling coefficients were last computed from
+        self.k_at_update, self.v_at_update = None, None
         self.lin_atol = lin_atol
         self.lin_rtol = lin_rtol
         self.k = k
@@ -203,7 +230,12 @@ class GeneratorNemCMFD:
         self.F = cmfd_fission(self.core)
         self.A = cmfd_absorption(self.core)
         self.M = self.A + diffusion_matrix(
-            self.neighbors, self.distances, self.surface_areas, self.materials_data.shape[2], self.current_calc
+            self.neighbors,
+            self.distances,
+            self.surface_areas,
+            self.materials_data.shape[2],
+            self.current_calc,
+            self.albedos,
         )
         self.dc = self.current_calc.dc
         self.df = self.current_calc.df
@@ -220,7 +252,12 @@ class GeneratorNemCMFD:
             if self.cmfd_iter > self.cmfd_max_iter:
                 self.update_coupling()
                 self.M = self.A + diffusion_matrix(
-                    self.neighbors, self.distances, self.surface_areas, self.materials_data.shape[2], self.current_calc
+                    self.neighbors,
+                    self.distances,
+                    self.surface_areas,
+                    self.materials_data.shape[2],
+                    self.current_calc,
+                    self.albedos,
                 )
                 self.cmfd_iter = 0
             return self.k, self.v
@@ -231,7 +268,7 @@ class GeneratorNemCMFD:
             raise StopIteration
 
     def set_first_guess(self):
-        self.k, self.v = generalized_eigenvalue_slepc(self.F, self.M)
+        self.k, self.v = generalized_eigenvalue_slepc(self.F, self.M, groups=self.materials_data.shape[2])
 
     def outer_iteration(self) -> tuple[float, np.array]:
         """
@@ -250,6 +287,7 @@ class GeneratorNemCMFD:
         return k, u
 
     def update_coupling(self) -> None:
+        self.k_at_update, self.v_at_update = self.k, self.v.copy()
         self.current_calc.coupling = update_coupling_coefficients(
             self.dim,
             self.materials_data,
@@ -262,38 +300,56 @@ class GeneratorNemCMFD:
             self.v,
             self.k,
             np.zeros_like(self.v),
+            self.albedos,
         )
+
+    def warn_on_negative_flux(self, u) -> None:
+        """
+        Warns, once per solution, if the flux is negative in some cells; the iteration goes on.
+        With coarse nodes the converged NEM solution can itself be slightly negative where the flux is small, as in
+        the reflector corners of ANL benchmark 14-A1 with one node per assembly, so a negative flux alone is not
+        a reason to stop. An iteration that fails to converge stops at max_iter.
+        """
+        positive = u * np.sign(np.sum(u))
+        if not self.negative_flux_warned and np.any(positive < 0):
+            self.negative_flux_warned = True
+            warnings.warn(
+                f"Negative flux in {np.sum(positive < 0)} of {len(u)} cells and energy groups at iteration {self.iter}, "
+                f"the smallest is {np.min(positive) / np.max(positive):.2e} of the largest; continuing"
+            )
+
+    def converged_since_coupling_update(self, k, u) -> bool:
+        """
+        Whether the eigenvalue and the flux changed by less than the tolerances since the coupling coefficients were
+        last computed. The coupling coefficients come from the NEM solution for that flux, so this is the convergence
+        of the nonlinear iteration; the CMFD iterations between updates only converge the CMFD equations.
+        """
+        if self.v_at_update is None:
+            return False
+        return abs(k - self.k_at_update) < self.tol_value and np.linalg.norm(
+            u - self.v_at_update
+        ) < self.rtol_vector * np.linalg.norm(u)
+
+    def raise_at_max_iter(self) -> None:
+        """Raises a RuntimeError once the number of iterations exceeds max_iter."""
+        if self.iter > self.max_iter:
+            raise RuntimeError(f"The NEM iteration did not converge in {self.max_iter} iterations")
 
     def should_stop(self, k, u) -> bool:
         """
-        Method that decides when to stop the iteration.
-        The iteration is stopped if the tolerances are achieved or if the flux becomes negative.
-        In the second case a warning is raised.
-        The CMFD algorithm is unstable if the flux is negative in any cell,
-        so the iteration is stopped before it loses stability.
+        Method that decides when to stop the iteration: when the eigenvalue changed by less than tol_value since
+        the previous iteration, the CMFD residual is below rtol_vector, and the eigenvalue and the flux changed by
+        less than the tolerances since the coupling coefficients were last computed.
+        A RuntimeError is raised if this does not happen within max_iter iterations.
         """
         if self.iter <= 2:
             return False
-        if np.any(u / u[0] < 0):
-            warnings.warn(
-                f"Negative flux encountered stopping iteration. "
-                f"convergence in k is {abs(k - self.k)}, tolerance is {self.tol_value}, "
-                f"convergence in flux is {np.linalg.norm(self.F @ u - k * self.M @ u)}, "
-                f"tolerance is {k * self.rtol_vector * np.linalg.norm(u)}"
-            )
-            logger.info(
-                f"Stopped after {self.iter} iteration because"
-                f"encountered negative flux."
-                f"convergence in k is {abs(k - self.k)}, tolerance is {self.tol_value}, "
-                f"convergence in flux is {np.linalg.norm(self.F @ u - k * self.M @ u)}, "
-                f"tolerance is {k * self.rtol_vector * np.linalg.norm(u)}"
-            )
-            return True
+        self.warn_on_negative_flux(u)
         to_stop = (
             abs(k - self.k) < self.tol_value
             and np.linalg.norm(self.F @ u - k * self.M @ u) < k * self.rtol_vector * np.linalg.norm(u)
-            and not np.all(self.current_calc.coupling == 0)
-        ) or self.iter > self.max_iter
+            and self.converged_since_coupling_update(k, u)
+        )
         if to_stop:
             logger.info(
                 f"Stopped after {self.iter} iteration because"
@@ -302,6 +358,8 @@ class GeneratorNemCMFD:
                 f"convergence in flux is {np.linalg.norm(self.F @ u - k * self.M @ u)}, "
                 f"tolerance is {k * self.rtol_vector * np.linalg.norm(u)}"
             )
+        else:
+            self.raise_at_max_iter()
         return to_stop
 
     def __iter__(self):
@@ -336,10 +394,12 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
     ----------
     core: Core
     source: np.array
-     The source of the problem.
+     The source of the problem: the total source in each cell and energy group (the source density times the
+     cell volume), not a density, organized by cell and then by energy group.
     cmfd_max_iter: int
-     the maximal number allowed of CMFD iterations without coefficients update. Default is 0,
-     meaning after each iteration the coupling coefficients are updated.
+     The maximal number of CMFD iterations without an update of the coupling coefficients. 0 updates them after
+     every iteration. The default, 2, gave the same eigenvalues (within 0.1 pcm) as 0 on the NEM benchmarks in about
+     60% of the time (IAEA3D: 14.4 s instead of 24.2 s): the NEM calculations are the expensive part.
     v: np.array
      guess for the average flux at each cell, if it is None
      a finite differences eigenvalue problem is solved at the first iteration.
@@ -353,15 +413,15 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
      Relative convergence for the linear solver.
     lin_atol: float
      Absolute convergence for the linear solver.
-    max-iter: float
-     Maximal number of CMFD iteration allowed.
+    max_iter: float
+     Maximal number of CMFD iterations allowed, a RuntimeError is raised if the iteration has not converged by then.
     """
 
     def __init__(
         self,
         core: Core,
         source: np.array,
-        cmfd_max_iter=0,
+        cmfd_max_iter=2,
         k: float = 1,
         v: np.array = None,
         tol_value: float = 1e-10,
@@ -387,6 +447,10 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
         return 1, u
 
     def update_coupling(self):
+        self.k_at_update, self.v_at_update = self.k, self.v.copy()
+        # self.source is the total source in each cell, as in the volume integrated CMFD equations,
+        # while the two-cell NEM equations balance it against reaction rates per unit volume.
+        source_density = self.source / np.repeat(self.volumes, self.materials_data.shape[2])
         self.current_calc.coupling = update_coupling_coefficients(
             self.dim,
             self.materials_data,
@@ -398,33 +462,31 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
             self.current_calc.coupling,
             self.v,
             self.k,
-            self.source,
+            source_density,
+            self.albedos,
         )
 
     def should_stop(self, k, u):
         """
         Method that decides when to stop the iteration.
-        The iteration is stopped if the tolerances are achieved or if the flux becomes negative.
-        In the second case a warning is raised.
-        The CMFD algorithm is unstable if the flux is negative in any cell,
-        so the iteration is stopped before it loses stability.
+        The tolerances are achieved when the CMFD equations are solved and the flux changed by less than the
+        relative tolerance since the coupling coefficients were last computed. The CMFD residual alone is not
+        enough: without fission the CMFD equations are solved exactly at every iteration, before the coupling
+        coefficients have converged.
+        A RuntimeError is raised if this does not happen within max_iter iterations.
         """
         if self.iter <= 2:
             return False
-        if np.any(u / u[0] < 0):
-            warnings.warn(
-                f"Negative flux encountered stopping iteration. "
-                f"convergence in flux is {np.linalg.norm(self.source + self.F @ u - self.M @ u)}, "
-                f"tolerance is {self.rtol_vector * np.linalg.norm(u)}"
-            )
-            return True
-        return (
-            np.linalg.norm(self.source + self.F @ u - self.M @ u) < self.rtol_vector * np.linalg.norm(u)
-            and not np.all(self.current_calc.coupling) == 0
-        ) or self.iter > self.max_iter
+        self.warn_on_negative_flux(u)
+        to_stop = np.linalg.norm(self.source + self.F @ u - self.M @ u) < self.rtol_vector * np.linalg.norm(
+            u
+        ) and self.converged_since_coupling_update(k, u)
+        if not to_stop:
+            self.raise_at_max_iter()
+        return to_stop
 
 
-@numba.njit()
+@numba.njit(cache=True, parallel=True)
 def update_coupling_coefficients(
     dim: int,
     mat_data: np.array,
@@ -437,11 +499,12 @@ def update_coupling_coefficients(
     v: np.array,
     k: float,
     source: np.array,
+    albedos: np.array,
 ):
     """
     Function that updates nodal coupling coefficients. It edits the coupling array in place.
     The computation is separated to a computation for the coupling coefficient between two cells
-    and a computation of the coupling coefficient near void boundary condition.
+    and a computation of the coupling coefficient near a void, extrapolation length or zero flux boundary condition.
     The coupling coefficient near reflective boundary conditions is 0.
 
     Parameters
@@ -469,245 +532,42 @@ def update_coupling_coefficients(
      The top eigenvalue, in a source problems is 1.
     source: np.array
      The source, in an eigenvalue problem is zero.
+    albedos: np.array
+     The albedo of each face, see :func:`boundary_albedos`.
     """
     E = mat_data.shape[2]
-    es = energy_slice
-    ns = other_axi
-    leak = leakage(neighbors_array, distances, surface_areas, dc, df, coupling, E, v, dim)
-    for cell, neighbors in enumerate(neighbors_array):
-        for face, neighbor in enumerate(neighbors):
-            axis = face // 2
-            t_axi = ns(axis, dim)
+    cells = neighbors_array.shape[0]
+    leak = leakage(neighbors_array, distances, surface_areas, dc, df, coupling, E, v, dim, albedos)
+    absorb, fission = np.empty((cells, E, E)), np.empty((cells, E, E))
+    for cell in range(cells):
+        absorb[cell] = _absorb(mat_data[cell])
+        fission[cell] = _nufission(mat_data[cell]) / k
+    # the cells are independent: each face between two cells is computed once, by the cell on its left, which
+    # writes the coefficient of both sides, and the other faces only by their cell
+    for index in numba.prange(cells):
+        cell = np.int64(index)  # the parallel loop index is unsigned; a signed one keeps cell and neighbors alike
+        mat, rhs = np.empty((8 * E, 8 * E)), np.empty(8 * E)  # work arrays for all the faces of the cell
+        neighbors = neighbors_array[cell]
+        for face in range(neighbors.shape[0]):
+            neighbor = neighbors[face]
             left = neighbors[op_face(face)]
-            l_left, leakage_left = length_and_leakage(distances, leak, cell, left, axis, t_axi)
-            l_right, leakage_right = length_and_leakage(distances, leak, cell, neighbor, axis, t_axi)
-            if (neighbor >= 0) and (face % 2 == 1):
-                coupling[cell, face] = _coupling_between_two_cells(
-                    E,
-                    v,
-                    es,
-                    distances,
-                    cell,
-                    neighbor,
-                    face,
-                    dc,
-                    mat_data,
-                    df,
-                    neighbors_array,
-                    leak,
-                    axis,
-                    t_axi,
-                    k,
-                    source,
-                    l_right,
-                    l_left,
-                    leakage_right,
-                    leakage_left,
-                )
-                coupling[neighbor, op_face(face)] = -coupling[cell, face]
-            elif neighbor == -1:
-                coupling[cell, face] = _coupling_between_cell_and_void(
-                    E,
-                    v,
-                    es,
-                    distances,
-                    cell,
-                    face,
-                    dc,
-                    mat_data,
-                    leak,
-                    axis,
-                    t_axi,
-                    k,
-                    l_right,
-                    l_left,
-                    leakage_right,
-                    leakage_left,
-                    source,
-                )
+            if neighbor >= 0 and face % 2 == 1:
+                righter = neighbors_array[neighbor, face]
+                two_node_coupling(
+                    coupling[cell, face], mat, rhs, E, dim, cell, neighbor, face, left, righter, v, dc, df, absorb,
+                    fission, source, leak, distances,
+                )  # fmt: skip
+                for g in range(E):
+                    coupling[neighbor, op_face(face), g] = -coupling[cell, face, g]
+            elif neighbor == -1 or neighbor == -3:
+                boundary_coupling(
+                    coupling[cell, face], mat, rhs, E, dim, cell, face, left, albedos[cell, face], v, dc, absorb,
+                    fission, source, leak, distances,
+                )  # fmt: skip
     return coupling
 
 
 @numba.njit(cache=True)
-def length_and_leakage(
-    distances: np.array, leak: np.array, cell: int, neighbor: int, axis: int, t_axi: tuple[int, int]
-) -> tuple[float, np.array]:
-    """
-    Extracts the length and leakage of a neighbor of a cell.
-    This is used for the quadratic leakage approximation which assumes that the leakage across the boundary of each cell
-    is a quadratic polynomial whose coefficients are the leaks from the neighboring cells.
-    In the case that a neighbor is a boundary, which is indicated by a negative neighbor the approximation is made that
-    the length of the "fake" neighbor cell is the same as the length of main cell and the leakage is opposite
-    of the leakage from the main cell.
-    This is done according to a recommendation which appears in a paper By Kord Smith.
-
-    Parameters
-    ----------
-    distances: np.array
-     Array of shape cells x faces which contains the distances between the center of each cell to its faces.
-    leak: np.array
-     array of shape cells x dim x E which contains the leakage from each cell in each direction.
-    cell: int
-     The number of the main cell.
-    neighbor: int
-     The number of the neighbor.
-    axis: int
-     The number of the axis connecting the cell to its neighbor.
-    t_axi: tuple[int,...]
-     The numbers of the axi which are different than axis.
-
-    Returns
-    -------
-    tuple[float, np.array]
-     The length of the neighbor cell and the leakage from it.
-    """
-    x, sign = (neighbor, 1) if not neighbor < 0 else (cell, -1)
-    length = 2 * distances[x, 2 * axis]
-    _leakage = sign * cells_axi_energy_slice(leak, x, t_axi)
-    return length, _leakage
-
-
-@numba.njit(cache=True)
-def _coupling_between_two_cells(
-    E,
-    v,
-    es,
-    distances,
-    cell,
-    neighbor,
-    face,
-    dc,
-    mat_data,
-    df,
-    neighbors_array,
-    leak,
-    axis,
-    t_axi,
-    k,
-    source,
-    l_right,
-    l_left,
-    leakage_right,
-    leakage_left,
-):
-    """Function that computes the coupling coefficient between two cells"""
-    mat = nem_mat(
-        E,
-        2 * distances[cell, face],
-        2 * distances[neighbor, face],
-        dc[cell],
-        dc[neighbor],
-        _absorb(mat_data[cell]),
-        _absorb(mat_data[neighbor]),
-        _nufission(mat_data[cell]) / k,
-        _nufission(mat_data[neighbor]) / k,
-        df[cell, face],
-        df[neighbor, op_face(face)],
-    )
-    righter = neighbors_array[neighbor][face]
-    l_righter, leakage_righter = length_and_leakage(distances, leak, neighbor, righter, axis, t_axi)
-    rhs = nem_rhs(
-        E,
-        v[es(cell, E)],
-        v[es(neighbor, E)],
-        cells_axi_energy_slice(leak, cell, t_axi),
-        _absorb(mat_data[cell]),
-        _absorb(mat_data[neighbor]),
-        _nufission(mat_data[cell]) / k,
-        _nufission(mat_data[neighbor]) / k,
-        leakage_right,
-        leakage_left,
-        2 * cells_axi_slice(distances, cell, 2 * t_axi),
-        df[cell, face],
-        df[neighbor, op_face(face)],
-        leakage_righter,
-        2 * distances[cell, 2 * axis],
-        l_right,
-        l_left,
-        l_righter,
-        source[es(cell, E)],
-        source[es(neighbor, E)],
-    )
-    poly_exp = np.linalg.solve(mat, rhs)
-    current = current_from_poly_exp(
-        E, poly_exp[cell_indices_in_two_cell_system(E)], dc[cell], 2 * distances[cell, 2 * axis], face
-    )
-    return compute_coupling_coefficients(
-        current,
-        v[es(cell, E)],
-        v[es(neighbor, E)],
-        dc[cell],
-        dc[neighbor],
-        2 * distances[cell, 2 * axis],
-        2 * distances[neighbor, 2 * axis],
-        df[cell, 2 * axis + 1],
-        df[neighbor, 2 * axis],
-    )
-
-
-@numba.njit(cache=True)
-def _coupling_between_cell_and_void(
-    E,
-    v,
-    es,
-    distances,
-    cell,
-    face,
-    dc,
-    mat_data,
-    leak,
-    axis,
-    t_axi,
-    k,
-    l_right,
-    l_left,
-    leakage_right,
-    leakage_left,
-    source,
-):
-    """
-    Function that computes the coupling coefficient between a cell and void boundary condition.
-    Void boundary condition is represented by the number -1.
-    """
-    D_over_l = np.diag(dc[cell]) / distances[cell, face] / 2
-    void_boundary_equation = np.hstack(
-        (
-            3 * D_over_l + np.diag(np.full((E,), 1 / 4)),
-            D_over_l / 5,
-            D_over_l + np.diag(np.full((E,), 1 / 4)),
-            D_over_l / 2,
-        )
-    )
-    mat = nem_boundary_mat(
-        E,
-        2 * distances[cell, face],
-        dc[cell],
-        _absorb(mat_data[cell]),
-        _nufission(mat_data[cell]) / k,
-        void_boundary_equation,
-    )
-    flux = v[es(cell, E)]
-    rhs = nem_boundary_rhs(
-        E,
-        flux,
-        cells_axi_energy_slice(leak, cell, t_axi),
-        _absorb(mat_data[cell]),
-        _nufission(mat_data[cell]) / k,
-        leakage_right,
-        leakage_left,
-        2 * cells_axi_slice(distances, cell, 2 * t_axi),
-        2 * distances[cell, 2 * axis],
-        l_right,
-        l_left,
-        source[es(cell, E)],
-        -flux / 2,
-    )
-    poly_exp = np.linalg.solve(mat, rhs)
-    current = current_from_poly_exp(E, poly_exp, dc[cell], 2 * distances[cell, 2 * axis], 1)
-    return boundary_coupling_coefficient(current, v[es(cell, E)], np.full(E, 1 / 2))
-
-
-@numba.njit()
 def _nufission(data: np.array):
     E = data.shape[1]
     if np.all(data[E + 3] == 0):
@@ -715,7 +575,7 @@ def _nufission(data: np.array):
     return np.outer(data[E + 3] / np.sum(data[E + 3]), data[E + 2])
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _absorb(data: np.array):
     E = data.shape[1]
     return np.diag(data[E + 1]) - data[:E, :]
