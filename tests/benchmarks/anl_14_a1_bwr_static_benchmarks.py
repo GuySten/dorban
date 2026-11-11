@@ -11,8 +11,9 @@ The reference results are from solution 14-A1-1 (CUBBOX, pages 557-560): k = 0.9
 1.01546 with the rod withdrawn, and the normalized power densities of Exhibit A. Solution 14-A1-2 (IQSBOX,
 pages 577-580) gives 0.99631 and 1.01531.
 
-The finite difference tests use a 0.9375 cm mesh, the NEM tests 2 x 2 nodes per assembly. With one node per
-assembly dorban's NEM stops on a negative flux before converging, so it is not tested.
+The finite difference tests use a 0.9375 cm mesh, the NEM tests 2 x 2 nodes and one node per assembly. With one
+node per assembly the converged NEM thermal flux is slightly negative (below 1e-4 of the maximum) in a few cells of
+the outer reflector corner; the eigenvalue and assembly powers are still close to the nodal reference.
 """
 
 from functools import lru_cache
@@ -87,12 +88,13 @@ def _regions(rod_withdrawn):
 
 
 @lru_cache(maxsize=None)
-def _solve(rod_withdrawn, method="finite differences"):
+def _solve(rod_withdrawn, method="finite differences", nodes_per_assembly=2):
     composition = [MATERIALS[region] for region in _regions(rod_withdrawn).flatten()]
     geometry = Cartesian([np.full(11, 15.0)] * 2, [Reflector(), ZeroFlux(), Reflector(), ZeroFlux()])
     if method == "NEM":
         core = Core(composition, 2, geometry, CMFDCurrentCalculator.from_isotopes(composition, 2))
-        k, flux = solve_k(core, NEMSettings(split=geometry.uniform_split(2)))
+        split = geometry.uniform_split(nodes_per_assembly) if nodes_per_assembly > 1 else None
+        k, flux = solve_k(core, NEMSettings(split=split))
     else:
         core = Core(composition, 2, geometry, CurrentCalculatorFD.from_isotopes(composition))
         k, flux = solve_k(core, FDSettings(split=geometry.uniform_split(SUBCELLS)))
@@ -133,6 +135,23 @@ def test_nem_k_rod_withdrawn(solution):
 
 def test_nem_assembly_power_initial_state():
     _, production = _solve(rod_withdrawn=False, method="NEM")
+    fuel = REFERENCE_POWER > 0
+    power = production[:9, :9] / np.mean(production[:9, :9][fuel])
+    assert np.max(np.abs(power[fuel] / REFERENCE_POWER[fuel] - 1)) < 0.03
+
+
+def test_nem_one_node_per_assembly_k_initial_state():
+    k, _ = _solve(rod_withdrawn=False, method="NEM", nodes_per_assembly=1)
+    assert k == pytest.approx(REFERENCE_K["IQSBOX"], abs=5e-5)
+
+
+def test_nem_one_node_per_assembly_k_rod_withdrawn():
+    k, _ = _solve(rod_withdrawn=True, method="NEM", nodes_per_assembly=1)
+    assert k == pytest.approx(REFERENCE_K_ROD_WITHDRAWN["IQSBOX"], abs=15e-5)
+
+
+def test_nem_one_node_per_assembly_power_initial_state():
+    _, production = _solve(rod_withdrawn=False, method="NEM", nodes_per_assembly=1)
     fuel = REFERENCE_POWER > 0
     power = production[:9, :9] / np.mean(production[:9, :9][fuel])
     assert np.max(np.abs(power[fuel] / REFERENCE_POWER[fuel] - 1)) < 0.03
