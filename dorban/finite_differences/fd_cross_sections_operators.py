@@ -66,7 +66,7 @@ def cmfd_absorption(system: Core) -> csr_matrix:
     return volumes(system) @ sigma_a(system)
 
 
-def boundary_current(geometry: FiniteGeometry, E: int) -> np.array:
+def boundary_current(geometry: FiniteGeometry, E: int, current_calc) -> np.array:
     """
     Computes the current vector on the boundary of the geometry, used for finding
     the flux that yields a known current at the boundary
@@ -77,6 +77,8 @@ def boundary_current(geometry: FiniteGeometry, E: int) -> np.array:
      The geometry that describes the system
     E:int
      The number of energy groups
+    current_calc: CurrentCalculator
+     The current calculator of the system
 
     Returns
     -------
@@ -89,6 +91,6 @@ def boundary_current(geometry: FiniteGeometry, E: int) -> np.array:
     for cell in range(geometry.cells):
         for face, neighbor in enumerate(geometry.neighbors[cell]):
             if isinstance(neighbor, CurrentCondition):
-                index, value = neighbor.boundary_current(E, cell, geometry.surface_area(cell, face))
+                index, value = neighbor.boundary_current(geometry, E, current_calc, cell, face)
                 current[index] += value
     return current

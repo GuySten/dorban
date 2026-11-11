@@ -196,19 +196,24 @@ class CurrentCondition(Boundary):
         return np.zeros(0), np.zeros(0), np.zeros(0)
 
     @abstractmethod
-    def boundary_current(self, E: int, cell: int, surface_area: float) -> Tuple[np.array, np.array]:
+    def boundary_current(self, geometry, E: int, current_calc, cell: int, face: int) -> Tuple[np.array, np.array]:
         r"""
-        gives the indices and the values in the current vector :math:`J=-D \nabla \phi`
-        to which this boundary contributes.
+        gives the indices and the values of the known part of the current through the boundary, the current entering
+        the system through the face times its area. It is the source term this boundary adds to the balance of the
+        cell.
 
         Parameters
         ----------
+        geometry: FiniteGeometry
+         the geometry of the system
         E:int
          the number of energy groups
+        current_calc: CurrentCalculator
+         the current calculator of the system, which gives the diffusion coefficients
         cell:int
          the number of the cell whose boundary this is
-        surface_area:float
-         the area of the face between the cell and the boundary
+        face:int
+         the number of the face of the cell on the boundary
 
         Returns
         -------
@@ -225,30 +230,39 @@ class KnownCurrent(CurrentCondition):
     the boundary.
     From the point of view of the diffusion matrix it is the same like reflective
     boundary condition, but it also allows finding the flux which yields a given
-    current on the boundary
+    current on the boundary.
+    The current is the net current entering the system per unit area, positive inwards.
     """
 
-    def boundary_current(self, E: int, cell: int, surface_area: float) -> Tuple[np.array, np.array]:
-        return np.arange(cell * E, (cell + 1) * E), surface_area * self.current
+    def boundary_current(self, geometry, E: int, current_calc, cell: int, face: int) -> Tuple[np.array, np.array]:
+        return np.arange(cell * E, (cell + 1) * E), geometry.surface_area(cell, face) * self.current
 
 
 class IncomingCurrent(CurrentCondition):
-    """
+    r"""
     This class is used in order to solve a fixed source problem when the source
-    is outside of the system
+    is outside of the system.
+    The current is the incoming partial current :math:`J^-` per unit area, positive inwards, as for
+    :class:`KnownCurrent`.
+
+    With the Marshak condition :math:`J^-=\phi_s/4-J/2` at the face, :math:`J` being the outgoing net current and
+    :math:`\phi_s` the flux at the face, and the finite difference current between the center of the cell and the
+    face :math:`J=D(\phi-\phi_s)/l`, the outgoing net current is
+
+    .. math:: J=\frac{\phi}{2+l/D}-\frac{2J^-}{1+l/(2D)}
+
+    The first term is the coefficient of :class:`Void`, the second the known current entering the cell.
     """
 
     def compute_boundary_coefficient(
         self, geometry, E, current_calc, cell: int, face: int
     ) -> Tuple[np.array, np.array, np.array]:
-        return (
-            np.arange(cell * E, (cell + 1) * E),
-            np.arange(cell * E, (cell + 1) * E),
-            np.full(E, 0.5 * geometry.surface_area(cell, face)),
-        )
+        return _albedo_boundary_coefficient(0.5, geometry, E, current_calc, cell, face)
 
-    def boundary_current(self, E: int, cell: int, surface_area: float) -> Tuple[np.array, np.array]:
-        return np.arange(cell * E, (cell + 1) * E), -2 * surface_area * self.current
+    def boundary_current(self, geometry, E: int, current_calc, cell: int, face: int) -> Tuple[np.array, np.array]:
+        distance = geometry.distance_to_face(cell, face)
+        entering = 2 * self.current / (1 + distance / (2 * current_calc.dc[cell]))
+        return np.arange(cell * E, (cell + 1) * E), geometry.surface_area(cell, face) * entering
 
 
 def glue_orange_blue(geometry: "FiniteGeometry", orange_indices: Sequence[int], blue_indices: Sequence[int]):

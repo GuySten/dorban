@@ -1,5 +1,6 @@
 """
-tests for the vacuum boundary conditions of finite differences and NEM against the exact solution of a bare slab
+tests for the vacuum boundary conditions of finite differences and NEM against the exact solution of a bare slab,
+and for the incoming current boundary condition against the exact solution of an absorbing slab
 """
 
 import numpy as np
@@ -7,13 +8,13 @@ import pytest
 import scipy.optimize as op
 
 from dorban.finite_differences.finite_difference_current_calculator import CurrentCalculatorFD
-from dorban.geometry.boundary_conditions import ExtrapolationLength, Reflector, Void, ZeroFlux
+from dorban.geometry.boundary_conditions import ExtrapolationLength, IncomingCurrent, Reflector, Void, ZeroFlux
 from dorban.geometry.cartesian import Cartesian
-from dorban.materials import Fissionable
+from dorban.materials import Fissionable, Isotope
 from dorban.nem.cmfd_current_calculator import CMFDCurrentCalculator
 from dorban.nem.solve_nem import NEMSettings
 from dorban.settings import FDSettings
-from dorban.solve_equation import solve_k
+from dorban.solve_equation import flux_with_given_boundary_current, solve_k
 from dorban.system import Core
 
 DIFFUSION, ABSORB, NUSIGMAF, HALF_WIDTH = 1.0, 0.05, 0.06, 10.0
@@ -72,3 +73,32 @@ def test_nem_vacuum_boundary(boundary, albedo):
     core = Core(composition, 1, geometry, CMFDCurrentCalculator.from_isotopes(composition, 2))
     k, _ = solve_k(core, NEMSettings(split=None))
     assert k == pytest.approx(exact_k(albedo), abs=0.5e-5)
+
+
+ABSORBER = Isotope("absorber", scatter=np.array([[0.0]]), absorb=np.array([ABSORB]), diffusion=np.array([DIFFUSION]))
+INCOMING = 2.0
+
+
+def exact_cell_flux(cells):
+    r"""
+    Absorbing slab, reflective at x = 0 and an incoming partial current :math:`J^-` at x = a: :math:`\phi=C\cosh(\kappa x)`
+    with :math:`\kappa^2=\Sigma_a/D`, and the Marshak condition :math:`J^-=\phi/4+D\phi'/2` at x = a gives C.
+    Returns the average flux of each of the cells.
+    """
+    kappa = np.sqrt(ABSORB / DIFFUSION)
+    c = INCOMING / (np.cosh(kappa * HALF_WIDTH) / 4 + DIFFUSION * kappa * np.sinh(kappa * HALF_WIDTH) / 2)
+    edges = np.linspace(0, HALF_WIDTH, cells + 1)
+    return c * np.diff(np.sinh(kappa * edges)) / kappa / np.diff(edges)
+
+
+def incoming_current_flux(cells):
+    geometry = Cartesian([np.full(cells, HALF_WIDTH / cells)], [Reflector(), IncomingCurrent(np.array([INCOMING]))])
+    composition = [ABSORBER] * cells
+    core = Core(composition, 1, geometry, CurrentCalculatorFD.from_isotopes(composition))
+    return flux_with_given_boundary_current(core, 1.0, rtol=1e-12, atol=1e-14)
+
+
+def test_incoming_current_converges_with_second_order():
+    errors = [np.max(np.abs(incoming_current_flux(n) / exact_cell_flux(n) - 1)) for n in (20, 40)]
+    assert errors[0] / errors[1] == pytest.approx(4, rel=0.05)
+    assert errors[1] < 6e-4
