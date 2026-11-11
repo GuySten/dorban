@@ -180,8 +180,8 @@ class GeneratorNemCMFD:
      Relative convergence for the linear solver.
     lin_atol: float
      Absolute convergence for the linear solver.
-    max-iter: float
-     Maximal number of CMFD iteration allowed.
+    max_iter: float
+     Maximal number of CMFD iterations allowed, a RuntimeError is raised if the iteration has not converged by then.
 
     """
 
@@ -221,6 +221,7 @@ class GeneratorNemCMFD:
         self.max_iter = max_iter
         self.cmfd_iter = 0
         self.iter = 0
+        self.negative_flux_warned = False
         self.lin_atol = lin_atol
         self.lin_rtol = lin_rtol
         self.k = k
@@ -307,36 +308,40 @@ class GeneratorNemCMFD:
             self.albedos,
         )
 
+    def warn_on_negative_flux(self, u) -> None:
+        """
+        Warns, once per solution, if the flux is negative in some cells; the iteration goes on.
+        With coarse nodes the converged NEM solution can itself be slightly negative where the flux is small, as in
+        the reflector corners of ANL benchmark 14-A1 with one node per assembly, so a negative flux alone is not
+        a reason to stop. An iteration that fails to converge stops at max_iter.
+        """
+        positive = u * np.sign(np.sum(u))
+        if not self.negative_flux_warned and np.any(positive < 0):
+            self.negative_flux_warned = True
+            warnings.warn(
+                f"Negative flux in {np.sum(positive < 0)} of {len(u)} cells and energy groups at iteration {self.iter}, "
+                f"the smallest is {np.min(positive) / np.max(positive):.2e} of the largest; continuing"
+            )
+
+    def raise_at_max_iter(self) -> None:
+        """Raises a RuntimeError once the number of iterations exceeds max_iter."""
+        if self.iter > self.max_iter:
+            raise RuntimeError(f"The NEM iteration did not converge in {self.max_iter} iterations")
+
     def should_stop(self, k, u) -> bool:
         """
-        Method that decides when to stop the iteration.
-        The iteration is stopped if the tolerances are achieved or if the flux becomes negative.
-        In the second case a warning is raised.
-        The CMFD algorithm is unstable if the flux is negative in any cell,
-        so the iteration is stopped before it loses stability.
+        Method that decides when to stop the iteration: when the eigenvalue changed by less than tol_value since
+        the previous iteration and the CMFD residual is below rtol_vector.
+        A RuntimeError is raised if this does not happen within max_iter iterations.
         """
         if self.iter <= 2:
             return False
-        if np.any(u / u[0] < 0):
-            warnings.warn(
-                f"Negative flux encountered stopping iteration. "
-                f"convergence in k is {abs(k - self.k)}, tolerance is {self.tol_value}, "
-                f"convergence in flux is {np.linalg.norm(self.F @ u - k * self.M @ u)}, "
-                f"tolerance is {k * self.rtol_vector * np.linalg.norm(u)}"
-            )
-            logger.info(
-                f"Stopped after {self.iter} iteration because"
-                f"encountered negative flux."
-                f"convergence in k is {abs(k - self.k)}, tolerance is {self.tol_value}, "
-                f"convergence in flux is {np.linalg.norm(self.F @ u - k * self.M @ u)}, "
-                f"tolerance is {k * self.rtol_vector * np.linalg.norm(u)}"
-            )
-            return True
+        self.warn_on_negative_flux(u)
         to_stop = (
             abs(k - self.k) < self.tol_value
             and np.linalg.norm(self.F @ u - k * self.M @ u) < k * self.rtol_vector * np.linalg.norm(u)
             and not np.all(self.current_calc.coupling == 0)
-        ) or self.iter > self.max_iter
+        )
         if to_stop:
             logger.info(
                 f"Stopped after {self.iter} iteration because"
@@ -345,6 +350,8 @@ class GeneratorNemCMFD:
                 f"convergence in flux is {np.linalg.norm(self.F @ u - k * self.M @ u)}, "
                 f"tolerance is {k * self.rtol_vector * np.linalg.norm(u)}"
             )
+        else:
+            self.raise_at_max_iter()
         return to_stop
 
     def __iter__(self):
@@ -397,8 +404,8 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
      Relative convergence for the linear solver.
     lin_atol: float
      Absolute convergence for the linear solver.
-    max-iter: float
-     Maximal number of CMFD iteration allowed.
+    max_iter: float
+     Maximal number of CMFD iterations allowed, a RuntimeError is raised if the iteration has not converged by then.
     """
 
     def __init__(
@@ -452,28 +459,22 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
     def should_stop(self, k, u):
         """
         Method that decides when to stop the iteration.
-        The iteration is stopped if the tolerances are achieved or if the flux becomes negative.
-        In the second case a warning is raised.
-        The CMFD algorithm is unstable if the flux is negative in any cell,
-        so the iteration is stopped before it loses stability.
         The tolerances are achieved when the CMFD equations are solved and the flux changed by less than the
         relative tolerance since the previous iteration. The CMFD residual alone is not enough: without fission
         the CMFD equations are solved exactly at every iteration, before the coupling coefficients have converged.
+        A RuntimeError is raised if this does not happen within max_iter iterations.
         """
         if self.iter <= 2:
             return False
-        if np.any(u / u[0] < 0):
-            warnings.warn(
-                f"Negative flux encountered stopping iteration. "
-                f"convergence in flux is {np.linalg.norm(self.source + self.F @ u - self.M @ u)}, "
-                f"tolerance is {self.rtol_vector * np.linalg.norm(u)}"
-            )
-            return True
-        return (
+        self.warn_on_negative_flux(u)
+        to_stop = (
             np.linalg.norm(self.source + self.F @ u - self.M @ u) < self.rtol_vector * np.linalg.norm(u)
             and np.linalg.norm(u - self.v) < self.rtol_vector * np.linalg.norm(u)
             and not np.all(self.current_calc.coupling == 0)
-        ) or self.iter > self.max_iter
+        )
+        if not to_stop:
+            self.raise_at_max_iter()
+        return to_stop
 
 
 @numba.njit(cache=True)
