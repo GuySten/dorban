@@ -132,7 +132,8 @@ def generalized_eigenvalue_slepc(
     for petsc_object in (vr, vi, sA, sM, solver):
         petsc_object.destroy()
     assert k == k.real
-    return k.real, vector
+    # the sign of an eigenvector is arbitrary: return it with a positive sum
+    return k.real, vector if np.sum(vector) >= 0 else -vector
 
 
 def scipy_to_petcs(A: sparse.spmatrix):

@@ -7,7 +7,7 @@ import pytest
 from scipy import sparse
 from scipy.sparse import csr_matrix
 
-from dorban.eigenvalue_solvers.arnoldi_arpack import generalized_arnoldi
+from dorban.eigenvalue_solvers.arnoldi_arpack import generalized_arnoldi, shift_invert_arnoldi
 from dorban.eigenvalue_solvers.power_iteration import generalized_eigenvalue
 from dorban.eigenvalue_solvers.slepc_methods import (
     generalized_eigenvalue_slepc,
@@ -76,3 +76,18 @@ def test_solve_linear_petsc_raises_when_not_converged():
     mat = _laplacian_2d(10)
     with pytest.raises(RuntimeError, match="did not converge"):
         solve_linear_petsc(mat, np.ones(mat.shape[0]), max_it=1)
+
+
+@pytest.mark.parametrize(
+    "solver", [generalized_eigenvalue, generalized_arnoldi, shift_invert_arnoldi, generalized_eigenvalue_slepc]
+)
+@pytest.mark.parametrize("negative_guess", [False, True])
+def test_eigenvector_sign_is_positive(solver, negative_guess):
+    # the dominant eigenvector of a positive matrix is positive (Perron-Frobenius), but an eigensolver returns it
+    # with an arbitrary sign; the solvers return it with a positive sum
+    rng = np.random.default_rng(1)
+    A = csr_matrix(rng.random((30, 30)))
+    M = csr_matrix(np.diag(np.arange(1.0, 31.0)) * 3)
+    guess = -np.ones(30) if negative_guess else None
+    _, v = solver(A, M, v=guess)
+    assert np.all(v > 0)
