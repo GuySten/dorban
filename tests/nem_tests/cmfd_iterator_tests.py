@@ -30,4 +30,5 @@ def test_source_iteration_stops_with_some_zero_coupling_coefficients():
     solver = GeneratorNemCMFDSource(core, source)
     converged_flux = spsolve((solver.M - solver.F).tocsc(), source)
     solver.iter = 3
+    solver.v = converged_flux
     assert solver.should_stop(1, converged_flux)

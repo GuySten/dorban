@@ -411,6 +411,9 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
         In the second case a warning is raised.
         The CMFD algorithm is unstable if the flux is negative in any cell,
         so the iteration is stopped before it loses stability.
+        The tolerances are achieved when the CMFD equations are solved and the flux changed by less than the
+        relative tolerance since the previous iteration. The CMFD residual alone is not enough: without fission
+        the CMFD equations are solved exactly at every iteration, before the coupling coefficients have converged.
         """
         if self.iter <= 2:
             return False
@@ -423,6 +426,7 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
             return True
         return (
             np.linalg.norm(self.source + self.F @ u - self.M @ u) < self.rtol_vector * np.linalg.norm(u)
+            and np.linalg.norm(u - self.v) < self.rtol_vector * np.linalg.norm(u)
             and not np.all(self.current_calc.coupling == 0)
         ) or self.iter > self.max_iter
 

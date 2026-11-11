@@ -18,6 +18,7 @@ MATERIAL_DATA = dict(
     diffusion=np.array([1.5, 0.4]),
 )
 FUEL = Fissionable("Fuel", nusigmaf=np.array([0.004, 0.06]), chi=np.array([1, 0]), **MATERIAL_DATA)
+ABSORBER = Isotope("Absorber", **MATERIAL_DATA)
 
 
 def fine_mesh_reference(geometry, material, source_density, refinement=12):
@@ -35,7 +36,7 @@ def fine_mesh_reference(geometry, material, source_density, refinement=12):
     return flux / np.repeat(geometry.volumes, E)
 
 
-@pytest.mark.parametrize("material", [FUEL], ids=["fissionable"])
+@pytest.mark.parametrize("material", [FUEL, ABSORBER], ids=["fissionable", "absorber"])
 def test_solve_source_nem_agrees_with_fine_mesh(material):
     geometry = Cartesian([np.full(6, 3.0), np.full(6, 3.0)], [Void()] * 4)
     materials = [material] * geometry.cells
