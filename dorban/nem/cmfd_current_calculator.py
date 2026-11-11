@@ -11,7 +11,6 @@ import numpy as np
 from dorban.geometry.boundary_conditions import Boundary
 from dorban.geometry.geometry import FiniteGeometry
 from dorban.system import IsotopeData
-from dorban.utils import op_face
 
 
 class CMFDCurrentCalculator:
@@ -54,47 +53,6 @@ class CMFDCurrentCalculator:
             self.E = 1
         self.coupling = coupling if coupling is not None else np.zeros((dc.shape[0], 2 * dim, self.E))
         self.df = df if df is not None else np.ones_like(self.coupling)
-
-    def compute_current_coefficients(
-        self, cell: int, neighbor: int, face: int, distances: np.array, surface_areas: np.array
-    ) -> tuple[np.array, np.array, np.array]:
-        """
-        This method computes the coefficients in the diffusion matrix
-         that represents the current between a cell and its neighbor
-
-        Parameters
-        ----------
-        cell: int
-         the number of the cell
-        neighbor:int
-         the number of the neighbor
-        face: int
-         the number of the face between cell and neighbor
-        distances: np.array
-         array of shape cells*faces which contains the distances between the center of each cell to the boundaries.
-        surface_areas: np.array
-         array of shape cells*faces which contains the surface area of each face.
-
-        Returns
-        -------
-        Tuple[np.array, np.array, np.array]
-         tuple of the row indices in the diffusion matrix in which the coefficients
-         appear, the column indices in the diffusion matrix in which the coefficients
-         appear, the values of the diffusion matrix
-        """
-        return _compute(
-            cell,
-            self.E,
-            neighbor,
-            self.dc[cell],
-            self.dc[neighbor],
-            distances[cell, face],
-            distances[neighbor, face],
-            self.df[cell, face],
-            self.df[neighbor, op_face(face)],
-            surface_areas[cell, face],
-            self.coupling[cell, face],
-        )
 
     def mesh_refine(
         self,

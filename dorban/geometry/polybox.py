@@ -72,6 +72,14 @@ class PolyBox(FiniteGeometry):
         """
         return self.lengths[cell][face // 2] / 2
 
+    def face_distances(self) -> np.array:
+        """The distances from the center of each cell to its faces, an array of shape cells x faces."""
+        return np.repeat(np.asarray(self.lengths, dtype=float) / 2, 2, axis=1)
+
+    def face_areas(self) -> np.array:
+        """The areas of the faces of each cell, an array of shape cells x faces."""
+        return np.repeat(self.volumes[:, None] / np.asarray(self.lengths, dtype=float), 2, axis=1)
+
     def opposite_face(self, face: int) -> int:
         """
         method to compute the number of the face of the cell who is adjacent to

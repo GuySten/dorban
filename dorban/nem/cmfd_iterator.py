@@ -204,18 +204,8 @@ class GeneratorNemCMFD:
         self.core = core
         self.dim = core.geometry.dim
         self.current_calc: CMFDCurrentCalculator = core.current_calc  # type: ignore
-        self.distances = np.array(
-            [
-                [core.geometry.distance_to_face(cell, face) for face in range(2 * self.dim)]
-                for cell in range(core.geometry.cells)
-            ]
-        )
-        self.surface_areas = np.array(
-            [
-                [core.geometry.surface_area(cell, face) for face in range(2 * self.dim)]
-                for cell in range(core.geometry.cells)
-            ]
-        )
+        self.distances = core.geometry.face_distances()
+        self.surface_areas = core.geometry.face_areas()
         self.neighbors = change_neighbors(core.geometry.neighbors)
         self.albedos = boundary_albedos(core.geometry.neighbors)
         self.volumes = core.geometry.volumes

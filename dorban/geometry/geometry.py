@@ -4,6 +4,10 @@ from typing import Protocol, Sequence, Union
 
 import numpy as np
 
+# codes in the array of face_neighbors
+BOUNDARY = -1  # the face is on a boundary
+NO_FACE = -2  # the cell has fewer faces than others
+
 
 class FiniteGeometry(Protocol):
     """
@@ -86,6 +90,40 @@ class FiniteGeometry(Protocol):
          the distance from the center of the cell to the face
         """
         raise NotImplementedError
+
+    def face_neighbors(self) -> np.array:
+        """
+        The neighbor across each face of each cell, as an array of shape cells x faces: the number of the neighboring
+        cell, BOUNDARY if the face is on a boundary, or NO_FACE where a cell has fewer faces than the others.
+        """
+        faces = max(len(row) for row in self.neighbors)
+        table = np.full((self.cells, faces), NO_FACE)
+        for cell, row in enumerate(self.neighbors):
+            for face, neighbor in enumerate(row):
+                table[cell, face] = BOUNDARY if not isinstance(neighbor, (int, np.integer)) else neighbor
+        return table
+
+    def face_distances(self) -> np.array:
+        """
+        The distance from the center of each cell to each of its faces, as an array of shape cells x faces
+        (0 where there is no face). Geometries may override it with a faster computation.
+        """
+        return self._face_values(self.distance_to_face)
+
+    def face_areas(self) -> np.array:
+        """
+        The area of each face of each cell, as an array of shape cells x faces (0 where there is no face).
+        Geometries may override it with a faster computation.
+        """
+        return self._face_values(self.surface_area)
+
+    def _face_values(self, value) -> np.array:
+        faces = max(len(row) for row in self.neighbors)
+        table = np.zeros((self.cells, faces))
+        for cell, row in enumerate(self.neighbors):
+            for face in range(len(row)):
+                table[cell, face] = value(cell, face)
+        return table
 
     def opposite_face(self, face: int) -> int:
         """

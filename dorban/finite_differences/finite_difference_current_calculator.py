@@ -2,10 +2,8 @@
 This module contains the finite differences current calculators
 """
 
-from typing import Sequence, Tuple
+from typing import Sequence
 
-import numba
-import numba.np.unsafe.ndarray
 import numpy as np
 
 from dorban.current_calculator import CurrentCalculator
@@ -52,65 +50,18 @@ class CurrentCalculatorFD(CurrentCalculator):
         """
         return self.dc[cell]
 
-    def compute_current_coefficients(
-        self, cell: int, neighbor: int, face: int, geometry: "FiniteGeometry"
-    ) -> Tuple[np.array, np.array, np.array]:
-        """
-        This method computes the coefficients in the diffusion matrix
-        that represents the current between a cell and its neighbor.
-
-        Parameters
-        ----------
-        cell: int
-         the number of the cell
-        neighbor: int
-         the number of the neighbor
-        face: int
-         the number of the face between cell and neighbor (in the cell)
-        geometry: FiniteGeometry
-         The geometry of the system
-
-        Returns
-        -------
-        Tuple[np.array, np.array, np.array]
-         tuple of the row indices in the diffusion matrix in which the coefficents
-         appear, the column indices in the diffusion matrix in which the coefficents
-         appear, the values of the diffusion matrix
-        """
-        return _compute(
-            cell,
-            self.E,
-            neighbor,
-            self.dc_on_face(cell, face, geometry),
-            self.dc_on_face(neighbor, geometry.opposite_face(face), geometry),
-            geometry.distance_to_face(cell, face),
-            geometry.distance_to_face(neighbor, face),
-            geometry.surface_area(cell, face),
-        )
-
-    def face_coefficients(self, cells, others, faces, opposite, distances, other_distances, areas):
+    def face_coefficients(self, cells, others, faces, opposite, distances, other_distances, areas, geometry):
         """
         The coefficients of the currents through many faces at once, see
-        :func:`~dorban.finite_differences.diffusion_operator.diffusion_matrix`.
-
-        Parameters
-        ----------
-        cells, others, faces, opposite: np.array
-         for each face, the cell, the neighbor, the number of the face in the cell and in the neighbor
-        distances, other_distances: np.array
-         the distances from the centers of the cell and of the neighbor to the face
-        areas: np.array
-         the areas of the faces
-
-        Returns
-        -------
-        Tuple[np.array, np.array]
-         arrays of shape faces x E: the current through the face is the first times the flux of the cell minus
-         the second times the flux of the neighbor
+        :meth:`dorban.current_calculator.CurrentCalculator.face_coefficients`.
         """
-        D1, D2 = self.dc[cells], self.dc[others]
+        D1, D2 = self.dcs_on_faces(cells, faces, geometry), self.dcs_on_faces(others, opposite, geometry)
         values = areas[:, None] * D1 * D2 / (D2 * distances[:, None] + D1 * other_distances[:, None])
         return values, values
+
+    def dcs_on_faces(self, cells: np.array, faces: np.array, geometry: FiniteGeometry) -> np.array:
+        """The diffusion coefficients of the given cells across the given faces, an array of shape faces x E."""
+        return self.dc[cells]
 
     def mesh_refine(self, geo: FiniteGeometry, split: Sequence, refgeo) -> "CurrentCalculatorFD":
         """
@@ -157,14 +108,6 @@ class CurrentCalculatorFD(CurrentCalculator):
         return cls(collect_diffusion_coefficients(isotopes, transport))
 
 
-@numba.njit(cache=True)
-def _compute(cell, E, neighbor, D1, D2, l1, l2, surface_area):
-    row_indices = np.hstack((np.arange(cell * E, (cell + 1) * E), np.arange(cell * E, (cell + 1) * E)))
-    col_indices = np.hstack((np.arange(neighbor * E, (neighbor + 1) * E), np.arange(cell * E, (cell + 1) * E)))
-    values = surface_area * (D1 * D2 / (D2 * l1 + D1 * l2))
-    return row_indices, col_indices, np.hstack((-values, values))
-
-
 class DiscontinuityCurrentCalculator(CurrentCalculator):
     r"""
     This is a class that computes the current between two cells using the
@@ -197,44 +140,6 @@ class DiscontinuityCurrentCalculator(CurrentCalculator):
         self.df = df
         self.E = dc.shape[1]
 
-    def compute_current_coefficients(
-        self, cell: int, neighbor: int, face: int, geometry: "FiniteGeometry"
-    ) -> Tuple[np.array, np.array, np.array]:
-        """
-        This method computes the coefficients in the diffusion matrix
-        that represents the current between a cell and its neighbor.
-
-        Parameters
-        ----------
-        cell: int
-         the number of the cell
-        neighbor: int
-         the number of the neighbor
-        face: int
-         the number of the face between cell and neighbor (in the cell)
-        geometry: FiniteGeometry
-         The geometry of the system
-
-        Returns
-        -------
-        Tuple[np.array, np.array, np.array]
-         tuple of the row indices in the diffusion matrix in which the coefficents
-         appear, the column indices in the diffusion matrix in which the coefficents
-         appear, the values of the diffusion matrix
-        """
-        return _compute_with_discontinuity(
-            cell,
-            self.E,
-            neighbor,
-            self.dc_on_face(cell, face, geometry),
-            self.dc_on_face(neighbor, geometry.opposite_face(face), geometry),
-            geometry.distance_to_face(cell, face),
-            geometry.distance_to_face(neighbor, face),
-            geometry.surface_area(cell, face),
-            self.df[cell][face],
-            self.df[neighbor][geometry.opposite_face(face)],
-        )
-
     def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> float:
         """
         returns the diffusion coefficient across a given face
@@ -250,10 +155,10 @@ class DiscontinuityCurrentCalculator(CurrentCalculator):
         """
         return self.dc[cell]
 
-    def face_coefficients(self, cells, others, faces, opposite, distances, other_distances, areas):
+    def face_coefficients(self, cells, others, faces, opposite, distances, other_distances, areas, geometry):
         """
         The coefficients of the currents through many faces at once, see
-        :meth:`CurrentCalculatorFD.face_coefficients`.
+        :meth:`dorban.current_calculator.CurrentCalculator.face_coefficients`.
         """
         D1, D2 = self.dc[cells], self.dc[others]
         df1, df2 = self.df[cells, faces], self.df[others, opposite]
@@ -351,14 +256,6 @@ def collect_diffusion_coefficients(isotopes: IsotopeData, transport: bool) -> np
     return np.vstack([relevant_data(isotope) for isotope in isotopes])
 
 
-@numba.njit(cache=True)
-def _compute_with_discontinuity(cell, E, neighbor, D1, D2, l1, l2, surface_area, df1, df2):
-    row_indices = np.hstack((np.arange(cell * E, (cell + 1) * E), np.arange(cell * E, (cell + 1) * E)))
-    col_indices = np.hstack((np.arange(neighbor * E, (neighbor + 1) * E), np.arange(cell * E, (cell + 1) * E)))
-    values = surface_area * D1 * D2 / (l2 * df2 * D1 + l1 * df1 * D2)
-    return row_indices, col_indices, np.hstack((-df2 * values, df1 * values))
-
-
 class DirectionalCurrentCalculator(CurrentCalculatorFD):
     r"""
     This is a current calculator that uses directional diffusion coefficients
@@ -393,8 +290,11 @@ class DirectionalCurrentCalculator(CurrentCalculatorFD):
     def __int__(self, dc: np.array):
         super().__init__(dc)
 
-    # the directional diffusion coefficients are computed face by face
-    face_coefficients = None
+    def dcs_on_faces(self, cells: np.array, faces: np.array, geometry: FiniteGeometry) -> np.array:
+        """The directional diffusion coefficients of the given cells across the given faces, see :meth:`dc_on_face`."""
+        directions = np.array([geometry.direction(face) for face in range(int(np.max(faces, initial=0)) + 1)])
+        direction = directions[faces]
+        return np.einsum("neij,nj,ni->ne", self.dc[cells], direction, direction)
 
     def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> float:
         direction = geometry.direction(face)

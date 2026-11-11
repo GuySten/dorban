@@ -18,30 +18,37 @@ class CurrentCalculator(Protocol):
 
     dc: np.array
 
-    def compute_current_coefficients(
-        self, cell: int, neighbor: int, face: int, geometry: FiniteGeometry
-    ) -> Tuple[np.array, np.array, np.array]:
+    def face_coefficients(
+        self,
+        cells: np.array,
+        others: np.array,
+        faces: np.array,
+        opposite: np.array,
+        distances: np.array,
+        other_distances: np.array,
+        areas: np.array,
+        geometry: FiniteGeometry,
+    ) -> Tuple[np.array, np.array]:
         """
-        This method computes the coefficients in the diffusion matrix
-        that represents the current between a cell and its neighbor
+        This method computes the coefficients in the diffusion matrix of the currents through many faces between
+        cells at once.
 
         Parameters
         ----------
-        cell: int
-            the number of the cell
-        neighbor: int
-            the number of the neighbor
-        face: int
-            the number of the face between cell and neighbor
-        geometry: Geometry
-            the geometry of the system
+        cells, others, faces, opposite: np.array
+         for each face, the cell, the neighbor, the number of the face in the cell and in the neighbor
+        distances, other_distances: np.array
+         the distances from the centers of the cell and of the neighbor to the face
+        areas: np.array
+         the areas of the faces
+        geometry: FiniteGeometry
+         the geometry of the system
 
         Returns
         -------
-        Tuple[np.array, np.array, np.array]
-            tuple of the row indices in the diffusion matrix in which the coefficents
-            appear, the column indices in the diffusion matrix in which the coefficents
-            appear, the values of the diffusion matrix
+        Tuple[np.array, np.array]
+         arrays of shape faces x E: the current through the face is the first times the flux of the cell minus
+         the second times the flux of the neighbor
         """
         raise NotImplementedError
 
