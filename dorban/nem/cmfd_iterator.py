@@ -387,6 +387,9 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
         return 1, u
 
     def update_coupling(self):
+        # self.source is the total source in each cell, as in the volume integrated CMFD equations,
+        # while the two-cell NEM equations balance it against reaction rates per unit volume.
+        source_density = self.source / np.repeat(self.volumes, self.materials_data.shape[2])
         self.current_calc.coupling = update_coupling_coefficients(
             self.dim,
             self.materials_data,
@@ -398,7 +401,7 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
             self.current_calc.coupling,
             self.v,
             self.k,
-            self.source,
+            source_density,
         )
 
     def should_stop(self, k, u):
