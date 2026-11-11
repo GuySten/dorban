@@ -13,7 +13,7 @@ The tests
 
 In order to run the tests run::
 
-	conda env update --file conda_test_requirements.yml
+	conda env update --file tests_requirements.yml
 
 Then in the tests folder run::
 
