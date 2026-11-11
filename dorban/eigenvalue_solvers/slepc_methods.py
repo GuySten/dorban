@@ -96,12 +96,15 @@ def solve_linear_petsc(A: sparse.spmatrix, b: np.array, atol=1e-14, rtol=1e-12, 
     ksp = petsc.KSP().create()
     ksp.setOperators(sA, sA)
     ksp.setTolerances(rtol, atol)
-    if np.any(guess):
-        ksp.setInitialGuessNonzero(petsc.Vec().createWithArray(guess))
     ksp.setType(solver_type)
-    x = petsc.Vec().create()
-    x.setSizes(len(b))
-    x.setFromOptions()
+    if guess is not None and np.any(guess):
+        # PETSc starts from the contents of x, so the solution vector holds a copy of the guess.
+        x = petsc.Vec().createWithArray(np.array(guess, dtype=petsc.ScalarType))
+        ksp.setInitialGuessNonzero(True)
+    else:
+        x = petsc.Vec().create()
+        x.setSizes(len(b))
+        x.setFromOptions()
     vector = petsc.Vec().createWithArray(b)
     ksp.setFromOptions()
     ksp.solve(vector, x)
