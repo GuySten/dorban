@@ -5,6 +5,40 @@ import petsc4py.PETSc as petsc
 import scipy.sparse as sparse
 import slepc4py.SLEPc as slepc
 
+_OPTIONS_PREFIX = "dorban_eps_"
+
+
+def _inner_solver_options(solver_name, lin_solver_name, pc_name, groups, lin_rtol) -> dict:
+    """
+    PETSc options for the linear solves inside the eigenvalue solver: the solves with M for Krylov-Schur,
+    the correction equation for Jacobi-Davidson.
+    """
+    if solver_name == "gd":
+        lin_solver_name = "preonly"
+    if lin_solver_name is not None or pc_name is not None:
+        options = {}
+        if lin_solver_name is not None:
+            options["st_ksp_type"] = lin_solver_name
+        if pc_name is not None:
+            options["st_pc_type"] = pc_name
+        return options
+    if groups is not None and groups > 1:
+        # With only down-scatter, M is block lower triangular by energy group and solving one group after the
+        # other is exact. Each group is a diffusion operator, solved with multigrid. With up-scatter this is a
+        # preconditioner, and the outer flexible GMRES makes the solve exact.
+        options = {
+            "st_ksp_type": "fgmres",
+            "st_pc_type": "fieldsplit",
+            "st_pc_fieldsplit_type": "multiplicative",
+            "st_pc_fieldsplit_block_size": str(groups),
+        }
+        for group in range(groups):
+            options[f"st_fieldsplit_{group}_ksp_type"] = "gmres"
+            options[f"st_fieldsplit_{group}_pc_type"] = "gamg"
+            options[f"st_fieldsplit_{group}_ksp_rtol"] = str(lin_rtol / 100)
+        return options
+    return {"st_ksp_type": "gmres", "st_pc_type": "gamg"}
+
 
 def generalized_eigenvalue_slepc(
     A: sparse.csr_matrix,
@@ -13,9 +47,10 @@ def generalized_eigenvalue_slepc(
     rtol_vector: float = 1e-10,
     lin_rtol=1e-12,
     max_iter=np.inf,
-    solver_name="jd",
-    lin_solver_name="bcgsl",
+    solver_name="krylovschur",
+    lin_solver_name=None,
     pc_name=None,
+    groups=None,
     **kwargs,
 ) -> Tuple[float, np.array]:
     r"""
@@ -36,20 +71,26 @@ def generalized_eigenvalue_slepc(
     max_iter: Optional[int]
      The maximal number of iterations allowed. If None, np.inf is used.
     solver_name: str
-     the name of the EPS to use, for all possible option see
-     the slepc manual, the useful ones are krylovschur and jd
+     the name of the EPS to use, for all possible option see the slepc manual.
+     The default, krylovschur, converges to the eigenvalues of largest magnitude.
+     jd (Jacobi-Davidson) is faster on some problems but can converge to another eigenvalue.
     lin_solver_name: str
      the name of KSP to use for solving the linear problems
      during the application of the eigenvalue solution
      algorithm, for a full list see the petsc manual,
-     the useful ones are bcgsl,lgmres and preonly
+     the useful ones are bcgsl, gmres, lgmres and preonly.
+     If neither lin_solver_name nor pc_name is given, a default is chosen, see groups.
     pc_name: str
      the name of the preconditioner to use during the KSP application,
      if None then the default of the chosen KSP is used.
      For a full list see the petsc manual, some of them are
-     jacobi, bjacobi, ilu and lu.
+     jacobi, bjacobi, ilu, gamg and lu.
      If the KSP is set to preonly then it only applies the preconditioner
      this way direct solvers can be used, for example with pc_name=lu
+    groups: Optional[int]
+     The number of energy groups, when the unknowns are ordered by cell and then by energy group.
+     If given (and neither lin_solver_name nor pc_name is), the linear problems are solved one energy group
+     after the other, each with algebraic multigrid. Otherwise GMRES with algebraic multigrid is used.
 
     Returns
     -------
@@ -57,29 +98,41 @@ def generalized_eigenvalue_slepc(
      the maximal eigenvalue and its eigenvector
     """
     max_iter = None if max_iter == np.inf else max_iter
-    if solver_name == "gd":
-        lin_solver_name = "preonly"
+    options = _inner_solver_options(solver_name, lin_solver_name, pc_name, groups, lin_rtol)
+    database = petsc.Options()
+    for key, value in options.items():
+        database[_OPTIONS_PREFIX + key] = value
     solver = slepc.EPS()
     solver.create()
     sA = scipy_to_petcs(A)
     sM = scipy_to_petcs(M)
-    solver.setOperators(sA, sM)
-    solver.setType(solver_name)
-    solver.setTolerances(rtol_vector, max_iter)
-    if v is not None:
-        solver.setInitialSpace(petsc.Vec().createWithArray(v))
-    ksp = solver.getST().getKSP()
-    ksp.setType(lin_solver_name)
-    ksp.setTolerances(lin_rtol, None)
-    solver.solve()
+    try:
+        if groups is not None and groups > 1:
+            sM.setBlockSize(groups)
+        solver.setOperators(sA, sM)
+        solver.setType(solver_name)
+        solver.setWhichEigenpairs(slepc.EPS.Which.LARGEST_MAGNITUDE)
+        solver.setTolerances(rtol_vector, max_iter)
+        if v is not None:
+            solver.setInitialSpace(petsc.Vec().createWithArray(v))
+        solver.getST().getKSP().setTolerances(lin_rtol, None)
+        solver.setOptionsPrefix(_OPTIONS_PREFIX)
+        solver.setFromOptions()
+        solver.solve()
+        if solver.getConverged() < 1:
+            raise RuntimeError(
+                f"SLEPc did not converge to an eigenvalue, converged reason {solver.getConvergedReason()}"
+            )
+    finally:
+        for key in options:
+            database.delValue(_OPTIONS_PREFIX + key)
     vr, vi = sA.createVecs()
     k = solver.getEigenpair(0, vr, vi)
-    sA.destroy()
-    sM.destroy()
-    ksp.destroy()
-    solver.destroy()
+    vector = vr.getArray().copy()
+    for petsc_object in (vr, vi, sA, sM, solver):
+        petsc_object.destroy()
     assert k == k.real
-    return k.real, vr.getArray()
+    return k.real, vector
 
 
 def scipy_to_petcs(A: sparse.spmatrix):

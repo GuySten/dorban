@@ -231,7 +231,7 @@ class GeneratorNemCMFD:
             raise StopIteration
 
     def set_first_guess(self):
-        self.k, self.v = generalized_eigenvalue_slepc(self.F, self.M)
+        self.k, self.v = generalized_eigenvalue_slepc(self.F, self.M, groups=self.materials_data.shape[2])
 
     def outer_iteration(self) -> tuple[float, np.array]:
         """
