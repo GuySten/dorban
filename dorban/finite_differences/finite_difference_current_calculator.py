@@ -88,6 +88,30 @@ class CurrentCalculatorFD(CurrentCalculator):
             geometry.surface_area(cell, face),
         )
 
+    def face_coefficients(self, cells, others, faces, opposite, distances, other_distances, areas):
+        """
+        The coefficients of the currents through many faces at once, see
+        :func:`~dorban.finite_differences.diffusion_operator.diffusion_matrix`.
+
+        Parameters
+        ----------
+        cells, others, faces, opposite: np.array
+         for each face, the cell, the neighbor, the number of the face in the cell and in the neighbor
+        distances, other_distances: np.array
+         the distances from the centers of the cell and of the neighbor to the face
+        areas: np.array
+         the areas of the faces
+
+        Returns
+        -------
+        Tuple[np.array, np.array]
+         arrays of shape faces x E: the current through the face is the first times the flux of the cell minus
+         the second times the flux of the neighbor
+        """
+        D1, D2 = self.dc[cells], self.dc[others]
+        values = areas[:, None] * D1 * D2 / (D2 * distances[:, None] + D1 * other_distances[:, None])
+        return values, values
+
     def mesh_refine(self, geo: FiniteGeometry, split: Sequence, refgeo) -> "CurrentCalculatorFD":
         """
         creates and returns a new CurrentCalculator which can calculate the
@@ -226,6 +250,16 @@ class DiscontinuityCurrentCalculator(CurrentCalculator):
         """
         return self.dc[cell]
 
+    def face_coefficients(self, cells, others, faces, opposite, distances, other_distances, areas):
+        """
+        The coefficients of the currents through many faces at once, see
+        :meth:`CurrentCalculatorFD.face_coefficients`.
+        """
+        D1, D2 = self.dc[cells], self.dc[others]
+        df1, df2 = self.df[cells, faces], self.df[others, opposite]
+        values = areas[:, None] * D1 * D2 / (other_distances[:, None] * df2 * D1 + distances[:, None] * df1 * D2)
+        return df1 * values, df2 * values
+
     def mesh_refine(
         self, geometry: FiniteGeometry, split: Sequence, refgeo: FiniteGeometry
     ) -> "DiscontinuityCurrentCalculator":
@@ -358,6 +392,9 @@ class DirectionalCurrentCalculator(CurrentCalculatorFD):
 
     def __int__(self, dc: np.array):
         super().__init__(dc)
+
+    # the directional diffusion coefficients are computed face by face
+    face_coefficients = None
 
     def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> float:
         direction = geometry.direction(face)
