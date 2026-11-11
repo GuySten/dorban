@@ -18,18 +18,7 @@ from dorban.materials import CrossSectionData
 from dorban.nem.cmfd_current_calculator import CMFDCurrentCalculator
 from dorban.nem.compiled_diffusion_matrix import diffusion_matrix
 from dorban.nem.leakage import leakage
-from dorban.nem.nem_coupling_rhs import nem_boundary_rhs, nem_rhs
-from dorban.nem.nem_matrices import nem_boundary_mat, nem_mat
-from dorban.nem.utils import (
-    boundary_coupling_coefficient,
-    cell_indices_in_two_cell_system,
-    cells_axi_energy_slice,
-    cells_axi_slice,
-    compute_coupling_coefficients,
-    current_from_poly_exp,
-    energy_slice,
-    other_axi,
-)
+from dorban.nem.two_node import boundary_coupling, two_node_coupling
 from dorban.system import Core
 from dorban.utils import op_face
 
@@ -538,255 +527,35 @@ def update_coupling_coefficients(
      The albedo of each face, see :func:`boundary_albedos`.
     """
     E = mat_data.shape[2]
-    ns = other_axi
+    cells = neighbors_array.shape[0]
     leak = leakage(neighbors_array, distances, surface_areas, dc, df, coupling, E, v, dim, albedos)
+    absorb, fission = np.empty((cells, E, E)), np.empty((cells, E, E))
+    for cell in range(cells):
+        absorb[cell] = _absorb(mat_data[cell])
+        fission[cell] = _nufission(mat_data[cell]) / k
     # the cells are independent: each face between two cells is computed once, by the cell on its left, which
     # writes the coefficient of both sides, and the other faces only by their cell
-    for index in numba.prange(neighbors_array.shape[0]):
+    for index in numba.prange(cells):
         cell = np.int64(index)  # the parallel loop index is unsigned; a signed one keeps cell and neighbors alike
+        mat, rhs = np.empty((8 * E, 8 * E)), np.empty(8 * E)  # work arrays for all the faces of the cell
         neighbors = neighbors_array[cell]
-        for face, neighbor in enumerate(neighbors):
-            axis = face // 2
-            t_axi = ns(axis, dim)
+        for face in range(neighbors.shape[0]):
+            neighbor = neighbors[face]
             left = neighbors[op_face(face)]
-            l_left, leakage_left = length_and_leakage(distances, leak, cell, left, axis, t_axi)
-            l_right, leakage_right = length_and_leakage(distances, leak, cell, neighbor, axis, t_axi)
-            if (neighbor >= 0) and (face % 2 == 1):
-                coupling[cell, face] = _coupling_between_two_cells(
-                    E,
-                    v,
-                    distances,
-                    cell,
-                    neighbor,
-                    face,
-                    dc,
-                    mat_data,
-                    df,
-                    neighbors_array,
-                    leak,
-                    axis,
-                    t_axi,
-                    k,
-                    source,
-                    l_right,
-                    l_left,
-                    leakage_right,
-                    leakage_left,
-                )
-                coupling[neighbor, op_face(face)] = -coupling[cell, face]
+            if neighbor >= 0 and face % 2 == 1:
+                righter = neighbors_array[neighbor, face]
+                two_node_coupling(
+                    coupling[cell, face], mat, rhs, E, dim, cell, neighbor, face, left, righter, v, dc, df, absorb,
+                    fission, source, leak, distances,
+                )  # fmt: skip
+                for g in range(E):
+                    coupling[neighbor, op_face(face), g] = -coupling[cell, face, g]
             elif neighbor == -1 or neighbor == -3:
-                coupling[cell, face] = _coupling_between_cell_and_boundary(
-                    E,
-                    v,
-                    distances,
-                    cell,
-                    face,
-                    dc,
-                    mat_data,
-                    leak,
-                    axis,
-                    t_axi,
-                    k,
-                    l_right,
-                    l_left,
-                    leakage_right,
-                    leakage_left,
-                    source,
-                    albedos[cell, face],
-                )
+                boundary_coupling(
+                    coupling[cell, face], mat, rhs, E, dim, cell, face, left, albedos[cell, face], v, dc, absorb,
+                    fission, source, leak, distances,
+                )  # fmt: skip
     return coupling
-
-
-@numba.njit(cache=True)
-def length_and_leakage(
-    distances: np.array, leak: np.array, cell: int, neighbor: int, axis: int, t_axi: tuple[int, int]
-) -> tuple[float, np.array]:
-    """
-    Extracts the length and leakage of a neighbor of a cell.
-    This is used for the quadratic leakage approximation which assumes that the leakage across the boundary of each cell
-    is a quadratic polynomial whose coefficients are the leaks from the neighboring cells.
-    In the case that a neighbor is a boundary, which is indicated by a negative neighbor the approximation is made that
-    the length of the "fake" neighbor cell is the same as the length of main cell and the leakage is opposite
-    of the leakage from the main cell.
-    This is done according to a recommendation which appears in a paper By Kord Smith.
-
-    Parameters
-    ----------
-    distances: np.array
-     Array of shape cells x faces which contains the distances between the center of each cell to its faces.
-    leak: np.array
-     array of shape cells x dim x E which contains the leakage from each cell in each direction.
-    cell: int
-     The number of the main cell.
-    neighbor: int
-     The number of the neighbor.
-    axis: int
-     The number of the axis connecting the cell to its neighbor.
-    t_axi: tuple[int,...]
-     The numbers of the axi which are different than axis.
-
-    Returns
-    -------
-    tuple[float, np.array]
-     The length of the neighbor cell and the leakage from it.
-    """
-    x, sign = (neighbor, 1) if not neighbor < 0 else (cell, -1)
-    length = 2 * distances[x, 2 * axis]
-    _leakage = sign * cells_axi_energy_slice(leak, x, t_axi)
-    return length, _leakage
-
-
-@numba.njit(cache=True)
-def _coupling_between_two_cells(
-    E,
-    v,
-    distances,
-    cell,
-    neighbor,
-    face,
-    dc,
-    mat_data,
-    df,
-    neighbors_array,
-    leak,
-    axis,
-    t_axi,
-    k,
-    source,
-    l_right,
-    l_left,
-    leakage_right,
-    leakage_left,
-):
-    """Function that computes the coupling coefficient between two cells"""
-    mat = nem_mat(
-        E,
-        2 * distances[cell, face],
-        2 * distances[neighbor, face],
-        dc[cell],
-        dc[neighbor],
-        _absorb(mat_data[cell]),
-        _absorb(mat_data[neighbor]),
-        _nufission(mat_data[cell]) / k,
-        _nufission(mat_data[neighbor]) / k,
-        df[cell, face],
-        df[neighbor, op_face(face)],
-    )
-    righter = neighbors_array[neighbor][face]
-    l_righter, leakage_righter = length_and_leakage(distances, leak, neighbor, righter, axis, t_axi)
-    rhs = nem_rhs(
-        E,
-        v[energy_slice(cell, E)],
-        v[energy_slice(neighbor, E)],
-        cells_axi_energy_slice(leak, cell, t_axi),
-        _absorb(mat_data[cell]),
-        _absorb(mat_data[neighbor]),
-        _nufission(mat_data[cell]) / k,
-        _nufission(mat_data[neighbor]) / k,
-        leakage_right,
-        leakage_left,
-        2 * cells_axi_slice(distances, cell, 2 * t_axi),
-        df[cell, face],
-        df[neighbor, op_face(face)],
-        leakage_righter,
-        2 * distances[cell, 2 * axis],
-        l_right,
-        l_left,
-        l_righter,
-        source[energy_slice(cell, E)],
-        source[energy_slice(neighbor, E)],
-    )
-    poly_exp = np.linalg.solve(mat, rhs)
-    current = current_from_poly_exp(
-        E, poly_exp[cell_indices_in_two_cell_system(E)], dc[cell], 2 * distances[cell, 2 * axis], face
-    )
-    return compute_coupling_coefficients(
-        current,
-        v[energy_slice(cell, E)],
-        v[energy_slice(neighbor, E)],
-        dc[cell],
-        dc[neighbor],
-        2 * distances[cell, 2 * axis],
-        2 * distances[neighbor, 2 * axis],
-        df[cell, 2 * axis + 1],
-        df[neighbor, 2 * axis],
-    )
-
-
-@numba.njit(cache=True)
-def _coupling_between_cell_and_boundary(
-    E,
-    v,
-    distances,
-    cell,
-    face,
-    dc,
-    mat_data,
-    leak,
-    axis,
-    t_axi,
-    k,
-    l_right,
-    l_left,
-    leakage_right,
-    leakage_left,
-    source,
-    albedo,
-):
-    r"""
-    Function that computes the coupling coefficient between a cell and a boundary condition of the form
-    :math:`J=\alpha\phi_s` (Void, ExtrapolationLength), or :math:`\phi_s=0` (ZeroFlux, :math:`\alpha=\infty`), where
-    :math:`\phi_s` is the flux at the boundary.
-    In the coordinates of the NEM polynomials the flux at the boundary is :math:`\bar{\phi}+a_1/2+a_2/2` and the
-    current is :math:`-D/l(a_1+3a_2+a_3/2+a_4/5)`.
-    The coupling coefficient is measured from the current of the CMFD equations without coupling: :math:`\alpha\bar\phi`
-    for a finite albedo and the finite differences current :math:`D\bar\phi/(l/2)` for zero flux.
-    """
-    flux = v[energy_slice(cell, E)]
-    D_over_l = np.diag(dc[cell]) / distances[cell, face] / 2
-    if np.isinf(albedo):
-        half = np.diag(np.full((E,), 1 / 2))
-        zeros = np.zeros((E, E))
-        boundary_equation = np.hstack((half, zeros, half, zeros))
-        boundary_rhs = -flux
-        cmfd_coefficient = dc[cell] / distances[cell, face]
-    else:
-        boundary_equation = np.hstack(
-            (
-                3 * D_over_l + np.diag(np.full((E,), albedo / 2)),
-                D_over_l / 5,
-                D_over_l + np.diag(np.full((E,), albedo / 2)),
-                D_over_l / 2,
-            )
-        )
-        boundary_rhs = -albedo * flux
-        cmfd_coefficient = np.full(E, albedo)
-    mat = nem_boundary_mat(
-        E,
-        2 * distances[cell, face],
-        dc[cell],
-        _absorb(mat_data[cell]),
-        _nufission(mat_data[cell]) / k,
-        boundary_equation,
-    )
-    rhs = nem_boundary_rhs(
-        E,
-        flux,
-        cells_axi_energy_slice(leak, cell, t_axi),
-        _absorb(mat_data[cell]),
-        _nufission(mat_data[cell]) / k,
-        leakage_right,
-        leakage_left,
-        2 * cells_axi_slice(distances, cell, 2 * t_axi),
-        2 * distances[cell, 2 * axis],
-        l_right,
-        l_left,
-        source[energy_slice(cell, E)],
-        boundary_rhs,
-    )
-    poly_exp = np.linalg.solve(mat, rhs)
-    current = current_from_poly_exp(E, poly_exp, dc[cell], 2 * distances[cell, 2 * axis], 1)
-    return boundary_coupling_coefficient(current, flux, cmfd_coefficient)
 
 
 @numba.njit(cache=True)
