@@ -52,23 +52,33 @@ class Cylindrical(Cartesian):
 
     def _radii(self, cell: int) -> tuple[float, float]:
         """The inner and outer radius of the cell."""
-        r = self._coordinates(cell)[0]
+        r = self.coordinates[cell, 0]
         return self.radii[r], self.radii[r + 1]
 
     def _height(self, cell: int) -> float:
-        return 1.0 if self.dim == 1 else self.lengths[1][self._coordinates(cell)[1]]
+        return 1.0 if self.dim == 1 else self.lengths[1][self.coordinates[cell, 1]]
 
-    def _volume(self, cell: int) -> float:
-        """
-        computes the volume of the cell.
+    def _ring_areas(self) -> np.array:
+        """The area :math:`\\pi(r_1^2-r_0^2)` of the cross section of each cell."""
+        r = self.coordinates[:, 0]
+        return np.pi * (self.radii[r + 1] ** 2 - self.radii[r] ** 2)
 
-        Parameters
-        ----------
-        cell: int
-         the number of the cell
-        """
-        inner, outer = self._radii(cell)
-        return np.pi * (outer**2 - inner**2) * self._height(cell)
+    def _heights(self) -> np.array:
+        return (
+            np.ones(self.cells) if self.dim == 1 else np.asarray(self.lengths[1], dtype=float)[self.coordinates[:, 1]]
+        )
+
+    def _volumes(self) -> np.array:
+        """The volumes of all the cells."""
+        return self._ring_areas() * self._heights()
+
+    def face_areas(self) -> np.array:
+        """The areas of the faces of each cell, an array of shape cells x faces, see :meth:`surface_area`."""
+        r = self.coordinates[:, 0]
+        radial = 2 * np.pi * np.stack([self.radii[r], self.radii[r + 1]], axis=1) * self._heights()[:, None]
+        if self.dim == 1:
+            return radial
+        return np.hstack([radial, np.repeat(self._ring_areas()[:, None], 2, axis=1)])
 
     def surface_area(self, cell: int, face: int) -> float:
         """
