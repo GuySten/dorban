@@ -186,7 +186,7 @@ def nem_half_assembly_nodes():
 
 def test_finite_differences_k_agrees_with_mesh_centered_solution_at_the_same_mesh(finite_differences):
     mesh, solution = finite_differences
-    assert solution["k"] == pytest.approx(VENTURE_K[mesh], abs=20e-5)
+    assert solution["k"] == pytest.approx(VENTURE_K[mesh], abs=2e-5)
 
 
 def test_finite_differences_on_the_finest_mesh(finite_differences_finest_mesh):
