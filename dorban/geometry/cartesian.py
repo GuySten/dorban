@@ -463,7 +463,7 @@ class Cartesian(FiniteGeometry):
         )
         black_absorber = list(i for i, x in enumerate(black_absorber_refined) if x)
         lengths = tuple(map(lambda i: np.repeat(self.lengths[i] / split[i], split[i]), range(self.dim)))
-        return Cartesian(lengths, self.boundary_conditions, black_absorber)
+        return self.__class__(lengths, self.boundary_conditions, black_absorber)
 
     def uniform_split(self, subcells: int) -> Sequence[np.array]:
         """

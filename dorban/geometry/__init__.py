@@ -5,6 +5,7 @@ Package that contains different types of :class:`Geometry <dorban.geometry.geome
 
 from dorban.geometry.boundary_conditions import Boundary, Reflector, Void
 from dorban.geometry.cartesian import Cartesian
+from dorban.geometry.cylindrical import Cylindrical
 from dorban.geometry.geometry import FiniteGeometry
 from dorban.geometry.polybox import PolyBox
 from dorban.geometry.triangular_tessellation import TriangularTessellation
@@ -14,6 +15,7 @@ __all__ = [
     "Reflector",
     "Void",
     "Cartesian",
+    "Cylindrical",
     "FiniteGeometry",
     "PolyBox",
     "TriangularTessellation",

@@ -13,6 +13,7 @@ import numpy as np
 from dorban.eigenvalue_solvers.slepc_methods import generalized_eigenvalue_slepc, solve_linear_petsc
 from dorban.finite_differences import cmfd_absorption, cmfd_fission
 from dorban.geometry.boundary_conditions import Boundary, ExtrapolationLength, Reflector, Void, ZeroFlux
+from dorban.geometry.cylindrical import Cylindrical
 from dorban.materials import CrossSectionData
 from dorban.nem.cmfd_current_calculator import CMFDCurrentCalculator
 from dorban.nem.compiled_diffusion_matrix import diffusion_matrix
@@ -198,6 +199,8 @@ class GeneratorNemCMFD:
         lin_atol=1e-8,
         max_iter=np.inf,
     ):
+        if isinstance(core.geometry, Cylindrical):
+            raise NotImplementedError("NEM is only implemented for Cartesian geometry, use finite differences")
         self.core = core
         self.dim = core.geometry.dim
         self.current_calc: CMFDCurrentCalculator = core.current_calc  # type: ignore

@@ -6,19 +6,24 @@ including the boundary conditions at the boundary of the geometry.
 .. inheritance-diagram::
    dorban.geometry.polybox.PolyBox
    dorban.geometry.cartesian.Cartesian
+   dorban.geometry.cylindrical.Cylindrical
    dorban.geometry.triangular_tessellation.TriangularTessellation
    dorban.geometry.spherical.Spherical
    :parts: 1
    :top-classes: dorban.geometry.geometry.FiniteGeometry
 
-There are three types of geometries:
+There are four types of geometries:
     - Cartesian geometry
+    - Cylindrical (R-Z) geometry
     - Triangular geometry
     - Spherical geometry
 
 There are two geometry classes which represent the cartesian geometry, they are
 the :class:`~dorban.geometry.polybox.PolyBox` class and the
 :class:`~dorban.geometry.cartesian.Cartesian` class.
+
+The :class:`~dorban.geometry.cylindrical.Cylindrical` class represents a cylinder that is symmetric around its axis,
+in R-Z or R. It is solved with finite differences; NEM is only implemented for Cartesian geometry.
 
 There is a unique class representing the triangular geometry which is the
 :class:`~dorban.geometry.triangular_tessellation.TriangularTessellation` class.
@@ -39,6 +44,14 @@ Cartesian
 ---------
 
 .. automodule:: dorban.geometry.cartesian
+   :members:
+   :no-undoc-members:
+   :show-inheritance:
+
+Cylindrical
+-----------
+
+.. automodule:: dorban.geometry.cylindrical
    :members:
    :no-undoc-members:
    :show-inheritance:
