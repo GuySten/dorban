@@ -13,7 +13,7 @@ Cell = int
 Length = float
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def leakage_coefficients(
     cell_leakage: np.array,
     left_leakage: np.array,
@@ -77,7 +77,7 @@ def leakage_coefficients(
     return p1, p2
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def leakage(
     neighbors: np.array,
     distances: np.array,
@@ -149,7 +149,7 @@ def leakage(
     return result
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def current_between_two_cells(
     cell: int,
     neighbor: int,
@@ -186,7 +186,7 @@ def current_between_two_cells(
     )
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def current_cell_and_void(surface_area: float, coupling: np.array, E: int, flux: np.array) -> np.array:
     """
     Function that computes the average current between a cell and void boundary condition,

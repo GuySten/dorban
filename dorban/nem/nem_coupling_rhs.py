@@ -12,7 +12,7 @@ import numpy as np
 from dorban.nem.leakage import leakage_coefficients
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def nem_rhs(
     E: int,
     flux1: np.array,
@@ -119,7 +119,7 @@ def nem_rhs(
     return rhs
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def nem_boundary_rhs(
     E: int,
     flux: np.array,
@@ -198,7 +198,7 @@ def nem_boundary_rhs(
     return rhs
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _leakage_rhs(length, cell_leakage, left_leakage, right_leakage, ll, l_left, l_right):
     c1, c2 = leakage_coefficients(cell_leakage, left_leakage, right_leakage, ll, l_left, l_right)
     return np.hstack((35 * c2 / length, 10 * c1 / length))

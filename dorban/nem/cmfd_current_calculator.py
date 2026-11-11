@@ -163,14 +163,14 @@ class CMFDCurrentCalculator:
         return cls(dc, dim)
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _compute(cell, E, neighbor, D1, D2, l1, l2, df1, df2, surface_area, coupling_coefficient):
     row_indices = np.hstack((np.arange(cell * E, (cell + 1) * E), np.arange(cell * E, (cell + 1) * E)))
     col_indices = np.hstack((np.arange(neighbor * E, (neighbor + 1) * E), np.arange(cell * E, (cell + 1) * E)))
     return row_indices, col_indices, _values(D1, D2, l1, l2, df1, df2, surface_area, coupling_coefficient)
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _values(D1, D2, l1, l2, df1, df2, surface_area, coupling_coefficient):
     diff = D1 * D2 / (l2 * df2 * D1 + l1 * df1 * D2)
     values = surface_area * diff

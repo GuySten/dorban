@@ -50,7 +50,7 @@ def diffusion_matrix(
     ).tocsr()
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _diffusion_matrix(
     neighbors, distances, surface_areas, E: int, dc, df, coupling, C
 ) -> tuple[list[np.array], list[np.array], list[np.array]]:

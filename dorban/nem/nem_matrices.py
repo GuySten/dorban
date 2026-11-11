@@ -15,7 +15,7 @@ import numba
 import numpy as np
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def single_cell_matrix(E: int, ll: float, D: np.array, absorber: np.array, fission: np.array) -> np.array:
     r"""
     This function builds the NEM equations of a single cell, which are the first three moments of the diffusion equations.
@@ -55,7 +55,7 @@ def single_cell_matrix(E: int, ll: float, D: np.array, absorber: np.array, fissi
     return diff_absorber - fission_mat
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def nem_mat(
     E: int,
     l1: float,
@@ -131,7 +131,7 @@ def nem_mat(
     return full_matrix
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def nem_boundary_mat(
     E: int, ll: float, D: np.array, absorber: np.array, fission: np.array, boundary_eq: np.array
 ) -> np.array:
