@@ -91,11 +91,11 @@ def scipy_to_petcs(A: sparse.spmatrix):
     return petsc.Mat().createAIJ(size=A.shape, **{A.format: (A.indptr, A.indices, A.data)})
 
 
-def solve_linear_petsc(A: sparse.spmatrix, b: np.array, atol=1e-14, rtol=1e-12, solver_type="bcgsl", guess=None):
-    sA = scipy_to_petcs(A)
+def _ksp_solve(sA, b, atol, rtol, solver_type, guess, max_it):
+    """Solve sA x = b with one PETSc KSP; return the solution and PETSc's converged reason."""
     ksp = petsc.KSP().create()
     ksp.setOperators(sA, sA)
-    ksp.setTolerances(rtol, atol)
+    ksp.setTolerances(rtol, atol, max_it=max_it)
     ksp.setType(solver_type)
     if guess is not None and np.any(guess):
         # PETSc starts from the contents of x, so the solution vector holds a copy of the guess.
@@ -108,9 +108,32 @@ def solve_linear_petsc(A: sparse.spmatrix, b: np.array, atol=1e-14, rtol=1e-12, 
     vector = petsc.Vec().createWithArray(b)
     ksp.setFromOptions()
     ksp.solve(vector, x)
-    array = x.array
-    sA.destroy()
+    reason = ksp.getConvergedReason()
+    array = x.array.copy()
     ksp.destroy()
     vector.destroy()
     x.destroy()
+    return array, reason
+
+
+def solve_linear_petsc(
+    A: sparse.spmatrix, b: np.array, atol=1e-14, rtol=1e-12, solver_type="bcgsl", guess=None, max_it=None
+):
+    """
+    Solve A x = b with PETSc and return x.
+
+    If the solver does not converge, the solve is repeated once with GMRES. BiCGStab(L), the default,
+    breaks down when the preconditioner is an exact factorization, as ILU(0) is for small problems.
+    If GMRES does not converge either, a RuntimeError is raised rather than returning an unconverged vector.
+    """
+    sA = scipy_to_petcs(A)
+    try:
+        array, reason = _ksp_solve(sA, b, atol, rtol, solver_type, guess, max_it)
+        if reason < 0 and solver_type != "gmres":
+            array, reason = _ksp_solve(sA, b, atol, rtol, "gmres", guess, max_it)
+    finally:
+        sA.destroy()
+    if reason < 0:
+        names = {v: k for k, v in vars(petsc.KSP.ConvergedReason).items() if isinstance(v, int)}
+        raise RuntimeError(f"PETSc linear solve did not converge: {names.get(reason, reason)}")
     return array

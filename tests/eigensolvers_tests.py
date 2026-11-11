@@ -3,6 +3,7 @@ tests for the various eigensolvers
 """
 
 import numpy as np
+import pytest
 from scipy import sparse
 from scipy.sparse import csr_matrix
 
@@ -59,3 +60,19 @@ def test_solve_linear_petsc_uses_initial_guess():
     result = solve_linear_petsc(mat, rhs, atol=0, rtol=0.5, guess=guess)
     assert np.allclose(result, exact, rtol=0, atol=1e-12)
     assert np.array_equal(guess, exact)
+
+
+def test_solve_linear_petsc_recovers_from_bcgsl_breakdown():
+    # Every entry is nonzero, so ILU(0) is an exact factorization; BiCGStab(L) then breaks down
+    # after one iteration (DIVERGED_DTOL). The solver must not return that unconverged vector.
+    rng = np.random.default_rng(0)
+    mat = sparse.csr_matrix(np.diag(np.arange(1.0, 9)) + 0.1 * rng.random((8, 8)))
+    rhs = np.ones(8)
+    result = solve_linear_petsc(mat, rhs)
+    assert np.allclose(mat @ result, rhs, rtol=0, atol=1e-10)
+
+
+def test_solve_linear_petsc_raises_when_not_converged():
+    mat = _laplacian_2d(10)
+    with pytest.raises(RuntimeError, match="did not converge"):
+        solve_linear_petsc(mat, np.ones(mat.shape[0]), max_it=1)
