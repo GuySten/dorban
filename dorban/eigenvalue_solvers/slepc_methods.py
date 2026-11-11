@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import petsc4py.PETSc as petsc
@@ -9,13 +9,34 @@ _OPTIONS_PREFIX = "dorban_eps_"
 # below this number of unknowns the linear problems are solved directly: algebraic multigrid gains nothing there and
 # its setup can break down on very small problems
 _DIRECT_SOLVE_SIZE = 20000
+# problems whose cells have at most this many neighbors, two dimensional ones, are solved directly at any size
+_DIRECT_SOLVE_NEIGHBORS = 4
 
 
-def _inner_solver_options(solver_name, lin_solver_name, pc_name, groups, lin_rtol, size) -> dict:
+def spatial_neighbors(M: sparse.spmatrix, groups: Optional[int]) -> int:
+    """
+    The largest number of neighbors of a cell in the matrix M, ordered by cell and then by energy group: the number
+    of off diagonal entries of a row in the same energy group. It is at most 2 in one dimension, 4 in two (3 for
+    triangles) and 6 in three (5 for triangular prisms).
+    """
+    groups = groups or 1
+    M = M.tocoo()
+    same_group = (M.row % groups == M.col % groups) & (M.row != M.col) & (M.data != 0)
+    counts = np.bincount(M.row[same_group], minlength=M.shape[0])
+    return int(counts.max()) if counts.size else 0
+
+
+def _inner_solver_options(solver_name, lin_solver_name, pc_name, groups, lin_rtol, M) -> dict:
     """
     PETSc options for the linear solves inside the eigenvalue solver: the solves with M for Krylov-Schur,
     the correction equation for Jacobi-Davidson.
+
+    The default is a direct solve (LU) for small problems and for two dimensional ones, where the fill of the factors
+    stays moderate: on two dimensional problems of 60,000 to 250,000 unknowns it was 2 to 8 times faster than the
+    iterative solve. In three dimensions the fill grows fast (93 s against 4.5 s for 155,000 unknowns), so larger
+    three dimensional problems are solved iteratively.
     """
+    size = M.shape[0]
     if solver_name == "gd":
         lin_solver_name = "preonly"
     if lin_solver_name is not None or pc_name is not None:
@@ -25,7 +46,7 @@ def _inner_solver_options(solver_name, lin_solver_name, pc_name, groups, lin_rto
         if pc_name is not None:
             options["st_pc_type"] = pc_name
         return options
-    if size < _DIRECT_SOLVE_SIZE:
+    if size < _DIRECT_SOLVE_SIZE or spatial_neighbors(M, groups) <= _DIRECT_SOLVE_NEIGHBORS:
         return {"st_ksp_type": "preonly", "st_pc_type": "lu"}
     if groups is not None and groups > 1:
         # With only down-scatter, M is block lower triangular by energy group and solving one group after the
@@ -85,7 +106,7 @@ def generalized_eigenvalue_slepc(
      algorithm, for a full list see the petsc manual,
      the useful ones are bcgsl, gmres, lgmres and preonly.
      If neither lin_solver_name nor pc_name is given, a default is chosen: a direct solve (LU) for fewer than
-     20000 unknowns, otherwise see groups.
+     20000 unknowns or when no cell has more than 4 neighbors (two dimensional problems), otherwise see groups.
     pc_name: str
      the name of the preconditioner to use during the KSP application,
      if None then the default of the chosen KSP is used.
@@ -95,8 +116,9 @@ def generalized_eigenvalue_slepc(
      this way direct solvers can be used, for example with pc_name=lu
     groups: Optional[int]
      The number of energy groups, when the unknowns are ordered by cell and then by energy group.
-     If given (and neither lin_solver_name nor pc_name is), problems of 20000 unknowns or more are solved one energy
-     group after the other, each with algebraic multigrid. Otherwise GMRES with algebraic multigrid is used.
+     It is needed to count the neighbors of the cells. If given (and neither lin_solver_name nor pc_name is), three
+     dimensional problems of 20000 unknowns or more are solved one energy group after the other, each with algebraic
+     multigrid. Otherwise GMRES with algebraic multigrid is used.
 
     Returns
     -------
@@ -104,7 +126,7 @@ def generalized_eigenvalue_slepc(
      the maximal eigenvalue and its eigenvector
     """
     max_iter = None if max_iter == np.inf else max_iter
-    options = _inner_solver_options(solver_name, lin_solver_name, pc_name, groups, lin_rtol, A.shape[0])
+    options = _inner_solver_options(solver_name, lin_solver_name, pc_name, groups, lin_rtol, M)
     database = petsc.Options()
     for key, value in options.items():
         database[_OPTIONS_PREFIX + key] = value
