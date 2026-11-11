@@ -77,7 +77,7 @@ def leakage_coefficients(
     return p1, p2
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, parallel=True)
 def leakage(
     neighbors: np.array,
     distances: np.array,
@@ -125,7 +125,9 @@ def leakage(
      Array whose shape is :math:`Cells x dim x E` which contains the leakages from each cell in each direction.
     """
     result = np.zeros((neighbors.shape[0], dim, E))
-    for cell, adj in enumerate(neighbors):
+    for index in numba.prange(neighbors.shape[0]):
+        cell = np.int64(index)  # the parallel loop index is unsigned; a signed one keeps cell and neighbors alike
+        adj = neighbors[cell]
         for axis in range(dim):
             left, right = adj[2 * axis : 2 * axis + 2]
             if right >= 0:
