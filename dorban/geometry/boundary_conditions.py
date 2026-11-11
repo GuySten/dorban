@@ -75,7 +75,7 @@ def _albedo_boundary_coefficient(albedo, geometry, E, current_calc, cell: int, f
     return (
         np.arange(cell * E, (cell + 1) * E),
         np.arange(cell * E, (cell + 1) * E),
-        geometry.surface_area(cell, face) / (1 / albedo + distance / current_calc.dc[cell]),
+        geometry.surface_area(cell, face) / (1 / albedo + distance / current_calc.dc_on_face(cell, face, geometry)),
     )
 
 
@@ -131,7 +131,7 @@ class ZeroFlux(Boundary):
         return (
             np.arange(cell * E, (cell + 1) * E),
             np.arange(cell * E, (cell + 1) * E),
-            np.full(E, s * current_calc.dc[cell] / distance),
+            np.full(E, s * current_calc.dc_on_face(cell, face, geometry) / distance),
         )
 
 
@@ -261,7 +261,7 @@ class IncomingCurrent(CurrentCondition):
 
     def boundary_current(self, geometry, E: int, current_calc, cell: int, face: int) -> Tuple[np.array, np.array]:
         distance = geometry.distance_to_face(cell, face)
-        entering = 2 * self.current / (1 + distance / (2 * current_calc.dc[cell]))
+        entering = 2 * self.current / (1 + distance / (2 * current_calc.dc_on_face(cell, face, geometry)))
         return np.arange(cell * E, (cell + 1) * E), geometry.surface_area(cell, face) * entering
 
 

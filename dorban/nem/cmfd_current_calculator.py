@@ -54,6 +54,10 @@ class CMFDCurrentCalculator:
         self.coupling = coupling if coupling is not None else np.zeros((dc.shape[0], 2 * dim, self.E))
         self.df = df if df is not None else np.ones_like(self.coupling)
 
+    def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> np.array:
+        """The diffusion coefficients of the cell across the face."""
+        return self.dc[cell]
+
     def mesh_refine(
         self,
         geo: FiniteGeometry,

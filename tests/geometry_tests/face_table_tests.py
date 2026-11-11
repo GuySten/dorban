@@ -68,10 +68,23 @@ def test_spherical_center_cell_has_one_face():
 
 @pytest.mark.parametrize("dim", [2, 3])
 def test_isotropic_directional_diffusion_is_the_scalar_one(dim):
-    # reflective boundaries: the vacuum boundary conditions take scalar diffusion coefficients
-    geometry = Cartesian([RNG.uniform(0.5, 2, n) for n in (4, 3, 2)[:dim]], [Reflector()] * (2 * dim))
+    boundaries = [Reflector(), Void(), ZeroFlux(), ExtrapolationLength(), Void(), ZeroFlux()][: 2 * dim]
+    geometry = Cartesian([RNG.uniform(0.5, 2, n) for n in (4, 3, 2)[:dim]], boundaries, [1])
     dc = RNG.uniform(0.5, 2, (geometry.cells, 2))
     tensor = dc[:, :, None, None] * np.eye(dim)
     scalar = diffusion_matrix(geometry, 2, CurrentCalculatorFD(dc))
+    directional = diffusion_matrix(geometry, 2, DirectionalCurrentCalculator(tensor))
+    assert abs(scalar - directional).max() < 1e-12
+
+
+def test_directional_diffusion_uses_the_coefficient_along_each_face():
+    # one row of cells, reflective along y: only the coefficient along x matters, at the cells and at the boundary
+    geometry = Cartesian(
+        [RNG.uniform(0.5, 2, 5), np.array([1.0])], [Void(), ExtrapolationLength(), Reflector(), Reflector()]
+    )
+    along_x, along_y = RNG.uniform(0.5, 2, (2, geometry.cells, 2))
+    tensor = np.zeros((geometry.cells, 2, 2, 2))
+    tensor[:, :, 0, 0], tensor[:, :, 1, 1] = along_x, along_y
+    scalar = diffusion_matrix(geometry, 2, CurrentCalculatorFD(along_x))
     directional = diffusion_matrix(geometry, 2, DirectionalCurrentCalculator(tensor))
     assert abs(scalar - directional).max() < 1e-12

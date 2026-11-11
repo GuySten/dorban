@@ -68,7 +68,7 @@ class CurrentCalculator(Protocol):
         """
         raise NotImplementedError
 
-    def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> float:
+    def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> np.array:
         """
         returns the diffusion coefficient across a given face
 

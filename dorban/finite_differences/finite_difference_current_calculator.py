@@ -35,7 +35,7 @@ class CurrentCalculatorFD(CurrentCalculator):
         self.dc = dc
         self.E = dc.shape[1]
 
-    def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> float:
+    def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> np.array:
         """
         returns the diffusion coefficient across a given face
 
@@ -140,7 +140,7 @@ class DiscontinuityCurrentCalculator(CurrentCalculator):
         self.df = df
         self.E = dc.shape[1]
 
-    def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> float:
+    def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> np.array:
         """
         returns the diffusion coefficient across a given face
 
@@ -296,6 +296,6 @@ class DirectionalCurrentCalculator(CurrentCalculatorFD):
         direction = directions[faces]
         return np.einsum("neij,nj,ni->ne", self.dc[cells], direction, direction)
 
-    def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> float:
+    def dc_on_face(self, cell: int, face: int, geometry: FiniteGeometry) -> np.array:
         direction = geometry.direction(face)
-        return float(np.dot(self.dc[cell] @ direction, direction))
+        return np.einsum("eij,j,i->e", self.dc[cell], direction, direction)
