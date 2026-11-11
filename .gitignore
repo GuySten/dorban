@@ -14,4 +14,3 @@ tests/summary.h5
 tests/tallies.xml
 tests/tallies.out
 tests/statepoint.*
-tests/**/*.txt
