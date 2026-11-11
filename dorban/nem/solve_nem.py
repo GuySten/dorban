@@ -112,6 +112,8 @@ def solve_source_nem(system: Core, settings: NEMSettings, source: np.array) -> n
     source: np.array
      The source is assumed to be constant within each node, energy group. The values of the source array
      are organized by energy group and the by cell, it is a one dimensional array of size cells x energy groups.
+     Each value is the total source in the node and energy group (the source density times the node volume),
+     not a density.
 
     Returns
     -------

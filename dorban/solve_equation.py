@@ -33,7 +33,8 @@ def fixed_source(system: Core, source: np.array, solver: Callable = la.lgmres, *
      object that represents the system
     source: np.array
      array that represents the source. its shape should be (cells,E) and its
-     value at (i,e) is the source intensity in the i-th cell at energy group e
+     value at (i,e) is the source intensity in the i-th cell at energy group e,
+     that is the total source in the cell (the source density times the cell volume), not a density
     solver: Callable
         method to solve Ax=b, the default value is lgmres
     kwargs

@@ -336,7 +336,8 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
     ----------
     core: Core
     source: np.array
-     The source of the problem.
+     The source of the problem: the total source in each cell and energy group (the source density times the
+     cell volume), not a density, organized by cell and then by energy group.
     cmfd_max_iter: int
      the maximal number allowed of CMFD iterations without coefficients update. Default is 0,
      meaning after each iteration the coupling coefficients are updated.
