@@ -44,7 +44,6 @@ test = [
     "pytest-regressions",
     "hypothesis",
     "jupyter",
-    "testbook",
 ]
 
 [tool.setuptools.packages.find]
