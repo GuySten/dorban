@@ -194,6 +194,15 @@ class GeneratorNemCMFD:
         self.core = core
         self.dim = core.geometry.dim
         self.current_calc: CMFDCurrentCalculator = core.current_calc  # type: ignore
+        faces = 2 * self.dim
+        for name in ("coupling", "df"):
+            shape = getattr(self.current_calc, name).shape
+            if shape[:2] != (core.geometry.cells, faces):
+                # the compiled NEM code does not check bounds: a mismatch would corrupt memory
+                raise ValueError(
+                    f"The {name} array of the current calculator has shape {shape}, but the geometry has "
+                    f"{core.geometry.cells} cells with {faces} faces (was it created for another dimension?)"
+                )
         self.distances = core.geometry.face_distances()
         self.surface_areas = core.geometry.face_areas()
         self.neighbors = change_neighbors(core.geometry.neighbors)
