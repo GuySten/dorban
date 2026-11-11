@@ -16,13 +16,15 @@ logger = logging.getLogger(__name__)
 
 class NEMSettings(Settings):
     """
-    settings for a NEM calculation
+    settings for a NEM calculation. split refines the cells into nodes, cmfd_iter is the number of CMFD iterations
+    between updates of the NEM coupling coefficients (see :class:`~dorban.nem.cmfd_iterator.GeneratorNemCMFD`),
+    and the other settings are those of :class:`~dorban.settings.Settings`.
     """
 
     def __init__(
         self,
         split=None,
-        cmfd_iter=0,
+        cmfd_iter=2,
         initial_flux: Optional[np.array] = None,
         initial_k: float = 1,
         k_tol: float = 1e-6,
