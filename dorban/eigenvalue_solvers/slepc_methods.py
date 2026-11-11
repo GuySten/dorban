@@ -72,7 +72,7 @@ def generalized_eigenvalue_slepc(
     ksp.setType(lin_solver_name)
     ksp.setTolerances(lin_rtol, None)
     solver.solve()
-    vr, vi = sA.getVecs()
+    vr, vi = sA.createVecs()
     k = solver.getEigenpair(0, vr, vi)
     sA.destroy()
     sM.destroy()
