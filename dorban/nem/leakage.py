@@ -88,6 +88,7 @@ def leakage(
     E: int,
     flux: np.array,
     dim: int,
+    albedos: np.array,
 ) -> np.array:
     r"""
     Computes the average leakage at all directions from each cell, assuming the flux is known. The computation of
@@ -115,6 +116,8 @@ def leakage(
      The array of the average flux at each cell
     dim: int
      The dimension of the system.
+    albedos: np.array
+     The albedo of each face, see :func:`dorban.nem.cmfd_iterator.boundary_albedos`.
 
     Returns
     -------
@@ -129,9 +132,12 @@ def leakage(
                 right_current = current_between_two_cells(
                     cell, right, axis, distances, surfaces_areas, dc, df, coupling, E, flux
                 )
-            elif right == -1:
-                right_current = current_cell_and_void(
-                    surfaces_areas[cell, 2 * axis + 1], coupling[cell, 2 * axis + 1], E, flux[cell * E : cell * E + E]
+            elif right == -1 or right == -3:
+                right_current = current_cell_and_boundary(
+                    surfaces_areas[cell, 2 * axis + 1],
+                    coupling[cell, 2 * axis + 1],
+                    _boundary_coefficient(right, albedos[cell, 2 * axis + 1], dc[cell], distances[cell, 2 * axis + 1]),
+                    flux[cell * E : cell * E + E],
                 )
             else:
                 right_current = np.zeros(E)
@@ -139,9 +145,12 @@ def leakage(
                 left_current = -current_between_two_cells(
                     left, cell, axis, distances, surfaces_areas, dc, df, coupling, E, flux
                 )
-            elif left == -1:
-                left_current = current_cell_and_void(
-                    surfaces_areas[cell, 2 * axis], coupling[cell, 2 * axis], E, flux[cell * E : cell * E + E]
+            elif left == -1 or left == -3:
+                left_current = current_cell_and_boundary(
+                    surfaces_areas[cell, 2 * axis],
+                    coupling[cell, 2 * axis],
+                    _boundary_coefficient(left, albedos[cell, 2 * axis], dc[cell], distances[cell, 2 * axis]),
+                    flux[cell * E : cell * E + E],
                 )
             else:
                 left_current = np.zeros(E)
@@ -184,6 +193,28 @@ def current_between_two_cells(
         ),
         axis=0,
     )
+
+
+@numba.njit(cache=True)
+def _boundary_coefficient(boundary: int, albedo: float, dc: np.array, distance: float) -> np.array:
+    """
+    The current through a boundary face per unit flux and area without the coupling coefficient: the albedo for
+    J = albedo * phi (number -1) and the finite differences D / (l / 2) for zero flux (number -3).
+    """
+    if boundary == -3:
+        return dc / distance
+    return np.full(dc.shape[0], albedo)
+
+
+@numba.njit(cache=True)
+def current_cell_and_boundary(
+    surface_area: float, coupling: np.array, coefficient: np.array, flux: np.array
+) -> np.array:
+    """
+    Function that computes the average current between a cell and a boundary condition, assuming the flux is known
+    using the modified Fick's law
+    """
+    return (coupling + coefficient) * surface_area * flux
 
 
 @numba.njit(cache=True)

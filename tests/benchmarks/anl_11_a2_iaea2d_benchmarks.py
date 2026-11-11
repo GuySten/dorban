@@ -7,9 +7,8 @@ The reference results are from solution 11-A2-1 (pages 440-445): the extrapolate
 solution, k = 1.02959, its zone average fluxes (Tables 2 and 3), and the mesh centered finite difference
 k at each mesh spacing (Table 1).
 
-The book's finite difference form of the vacuum boundary, d(phi)/dn = -0.4692 phi / D, is ExtrapolationLength.
-NEM does not implement ExtrapolationLength, so the NEM tests use Void (J = phi / 2), which changes k by less
-than 1 pcm here.
+The book's finite difference form of the vacuum boundary, d(phi)/dn = -0.4692 phi / D, is ExtrapolationLength,
+used by both the finite difference and the NEM tests.
 """
 
 from functools import lru_cache
@@ -156,7 +155,7 @@ def _solve_finite_differences(mesh):
 
 
 def _solve_nem(nodes_per_assembly):
-    geometry = _geometry(Void)
+    geometry = _geometry(ExtrapolationLength)
     composition = _composition()
     core = Core(composition, 2, geometry, CMFDCurrentCalculator.from_isotopes(composition, 2))
     split = geometry.uniform_split(nodes_per_assembly) if nodes_per_assembly > 1 else None

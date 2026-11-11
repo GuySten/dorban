@@ -1,5 +1,5 @@
 """
-tests for the finite difference vacuum boundary conditions against the exact solution of a bare slab
+tests for the vacuum boundary conditions of finite differences and NEM against the exact solution of a bare slab
 """
 
 import numpy as np
@@ -7,9 +7,11 @@ import pytest
 import scipy.optimize as op
 
 from dorban.finite_differences.finite_difference_current_calculator import CurrentCalculatorFD
-from dorban.geometry.boundary_conditions import ExtrapolationLength, Reflector, Void
+from dorban.geometry.boundary_conditions import ExtrapolationLength, Reflector, Void, ZeroFlux
 from dorban.geometry.cartesian import Cartesian
 from dorban.materials import Fissionable
+from dorban.nem.cmfd_current_calculator import CMFDCurrentCalculator
+from dorban.nem.solve_nem import NEMSettings
 from dorban.settings import FDSettings
 from dorban.solve_equation import solve_k
 from dorban.system import Core
@@ -28,8 +30,11 @@ FUEL = Fissionable(
 def exact_k(albedo):
     r"""
     One group slab, reflective at x = 0 and J = albedo * phi at x = a: phi = cos(Bx), so the boundary condition is
-    :math:`B\tan(Ba) = \alpha / D` and :math:`k = \nu\Sigma_f / (\Sigma_a + DB^2)`.
+    :math:`B\tan(Ba) = \alpha / D` and :math:`k = \nu\Sigma_f / (\Sigma_a + DB^2)`. Zero flux is an infinite albedo,
+    :math:`B = \pi / 2a`.
     """
+    if np.isinf(albedo):
+        return NUSIGMAF / (ABSORB + DIFFUSION * (np.pi / (2 * HALF_WIDTH)) ** 2)
     buckling = op.brentq(
         lambda b: b * np.tan(b * HALF_WIDTH) - albedo / DIFFUSION,
         1e-9,
@@ -53,3 +58,17 @@ def test_vacuum_boundary_converges_with_second_order(boundary, albedo):
     coarse, fine = finite_difference_k(boundary, 20), finite_difference_k(boundary, 40)
     assert (coarse - reference) / (fine - reference) == pytest.approx(4, rel=0.05)
     assert (4 * fine - coarse) / 3 == pytest.approx(reference, abs=1e-5)
+
+
+@pytest.mark.parametrize(
+    "boundary, albedo", [(Void, 0.5), (ExtrapolationLength, ExtrapolationLength.constant), (ZeroFlux, np.inf)]
+)
+def test_nem_vacuum_boundary(boundary, albedo):
+    # the slab as a strip of two 5 cm nodes, reflective above and below
+    geometry = Cartesian(
+        [np.full(2, HALF_WIDTH / 2), np.array([5.0])], [Reflector(), boundary(), Reflector(), Reflector()]
+    )
+    composition = [FUEL] * geometry.cells
+    core = Core(composition, 1, geometry, CMFDCurrentCalculator.from_isotopes(composition, 2))
+    k, _ = solve_k(core, NEMSettings(split=None))
+    assert k == pytest.approx(exact_k(albedo), abs=0.5e-5)
