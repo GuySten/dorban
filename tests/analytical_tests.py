@@ -1,6 +1,7 @@
 from typing import Tuple
 
 import numpy as np
+import pytest
 import scipy.optimize as op
 
 from dorban.eigenvalue_solvers.slepc_methods import generalized_eigenvalue_slepc
@@ -40,76 +41,52 @@ def diml_group1(
 def fuel_in_water(
     fuel: CrossSectionData,
     water: CrossSectionData,
-    fuel_length: float,
-    water_length: float,
+    half_fuel: float,
+    water_thickness: float,
     diffusion: Tuple[float, float],
-    fuel_cells: int,
-    water_cells: int,
+    x: np.array,
 ) -> Tuple[float, np.array]:
-    """
-    Compute the k eigenvalue of 1 dimensional system of a fuel slab
-     surrounded by 2 water slabs in 1 energy group
+    r"""
+    Exact one-group diffusion solution of a fuel slab :math:`|x|<a` surrounded by water slabs
+    :math:`a<|x|<a+b`, with the Marshak vacuum condition :math:`\phi+2D\phi'=0` outside the water.
+
+    In the fuel :math:`\phi=\cos(Bx)` and :math:`k=\nu\Sigma_f/(\Sigma_a+D_fB^2)`. The water does not
+    multiply, so there :math:`\phi=P\cosh(\kappa(|x|-a))+Q\sinh(\kappa(|x|-a))` with
+    :math:`\kappa=\sqrt{\Sigma_{a,w}/D_w}`. Continuity of the flux and the current at :math:`|x|=a` gives
+    :math:`P` and :math:`Q`, and the vacuum condition gives the equation for the fundamental :math:`B`.
 
     Parameters
     ----------
     fuel - Fissionable Isotope with cross sections in 1 energy group
     water - non Fissionable Isotope with cross sections in 1 energy group
-    fuel_length - half the thickness of the fuel slab
-    water_length - the thickness of 1 water slab
-    diffusion_coefficients - tuple of length 2 containing the diffusion
-    coefficients of the fuel at 0 and of the water at 1,
+    half_fuel - half the thickness of the fuel slab
+    water_thickness - the thickness of 1 water slab
+    diffusion - the diffusion coefficients of the fuel and of the water
+    x - the points, measured from the center of the fuel, at which to evaluate the flux
+
     Returns
     -------
-    The k eigenvalue of the problem and a dict whose keys are points on the x
-    axis and its values are the values of flux at those points.
+    The k eigenvalue of the problem and the flux at x, up to normalization.
     """
-    fuel_cells *= 2
-    water_cells *= 2
-    water_laplace_coefficient = water.absorb[0] / diffusion[1]
-    a_2 = np.sqrt(water_laplace_coefficient)[0]
-    length = fuel_length + water_length
-    C = (np.cos(a_2 * length) + 2 * diffusion[1] * a_2 * np.sin(a_2 * length)) / (
-        2 * diffusion[1] * a_2 * np.cos(a_2 * length) - np.sin(a_2 * length)
-    )
-    C = C[0]
-    tan_a1 = (
-        fuel_length
-        * (
-            a_2 * diffusion[1] * np.sin(a_2 * fuel_length)
-            - C * a_2 * diffusion[1] * np.cos(a_2 * fuel_length)
+    d_f, d_w = (float(np.squeeze(d)) for d in diffusion)
+    kappa = np.sqrt(water.absorb[0] / d_w)
+    a, b = half_fuel, water_thickness
+
+    def water_coefficients(buckling):
+        return np.cos(buckling * a), -d_f * buckling * np.sin(buckling * a) / (d_w * kappa)
+
+    def vacuum_condition(buckling):
+        p, q = water_coefficients(buckling)
+        return p * (np.cosh(kappa * b) + 2 * d_w * kappa * np.sinh(kappa * b)) + q * (
+            np.sinh(kappa * b) + 2 * d_w * kappa * np.cosh(kappa * b)
         )
-        / (
-            diffusion[0] * np.cos(a_2 * fuel_length)
-            + C * diffusion[0] * np.sin(a_2 * fuel_length)
-        )
-    )
-    a_1 = (
-        op.bisect(lambda x: x * np.tan(x) - np.real(tan_a1).item(), 0, 1.1, xtol=1e-10)
-        / fuel_length
-    )
-    k = fuel.nusigmaf[0] / (fuel.absorb + diffusion[0] * a_1**2)
-    point = length * a_2
-    ratio = (2 * diffusion[1] * a_2 * np.sin(point) - np.cos(point)) / (
-        2 * diffusion[1] * a_2 * np.cos(point) + np.sin(point)
-    )
-    fuel_flux = np.array(
-        [
-            np.cos((a_1 * fuel_length * (-1 + 2 * i / fuel_cells)))
-            for i in range(fuel_cells)
-        ]
-    )
-    water_flux = np.array(
-        [
-            np.cos(a_2 * (fuel_length + i * water_length))
-            + ratio * np.sin(a_2 * (fuel_length + i * water_length))
-            for i in np.arange(water_cells) / (water_cells - 1)
-        ]
-    )
-    water_flux = np.array([a[0].real for a in water_flux])
-    constant = water_flux[0] / fuel_flux[0]
-    fuel_flux *= constant
-    flux = np.hstack([water_flux[-1::-2], fuel_flux[1::2], water_flux[1::2]])
-    return k.item(), flux
+
+    buckling = op.brentq(vacuum_condition, 1e-12, np.pi / (2 * a) * (1 - 1e-12), xtol=1e-15)
+    k = fuel.nusigmaf[0] / (fuel.absorb[0] + d_f * buckling**2)
+    p, q = water_coefficients(buckling)
+    r = np.abs(x)
+    flux = np.where(r <= a, np.cos(buckling * x), p * np.cosh(kappa * (r - a)) + q * np.sinh(kappa * (r - a)))
+    return k, flux
 
 
 def test_hom_1dim_1group():
@@ -198,15 +175,15 @@ def test_fuel_in_water(water, uranium):
         system, solver=solver, lin_atol=1e-10, lin_rtol=1e-10, atol_vector=1e-12
     )
 
-    k_analytic, flux_analytic = fuel_in_water(
-        uranium,
-        water,
-        fuel_length / 2,
-        water_length,
-        (diff_fuel, diff_water),
-        cells_fuel,
-        cells_water,
-    )
-    flux_analytic = flux_analytic * np.sum(flux) / np.sum(flux_analytic)
-    assert np.isclose(k, k_analytic, atol=1e-6)
-    assert np.max(np.abs(flux - flux_analytic) / flux_analytic) < 1e-3
+    edges = np.concatenate([[0], np.cumsum(lengths)]) - (water_length + fuel_length / 2)
+    centers = (edges[1:] + edges[:-1]) / 2
+    k_analytic, flux_analytic = fuel_in_water(uranium, water, fuel_length / 2, water_length, (diff_fuel, diff_water), centers)
+    flux = flux / np.sum(flux)
+    flux_analytic = flux_analytic / np.sum(flux_analytic)
+    relative_error = np.abs((flux - flux_analytic) / flux_analytic)
+    fuel = slice(cells_water, cells_water + cells_fuel)
+    assert k == pytest.approx(k_analytic, abs=1e-8)
+    assert np.max(relative_error[fuel]) < 1e-4
+    # The Void boundary condition sets the outgoing current from the flux at the center of the outermost cell
+    # rather than at the boundary, which is first order in the cell size: 0.6% at the vacuum boundary here.
+    assert np.max(relative_error) < 1e-2
