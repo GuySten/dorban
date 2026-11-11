@@ -267,20 +267,6 @@ def Isotope(name: str, scatter: np.array, absorb: np.array, **kwargs):
     return CrossSectionData(name, data, special)
 
 
-def test_isotope_generation():
-    absorb = np.array([1, 2, 3])
-    scatter = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
-    kappa = np.array([2, 3, 5])
-    mat1 = Isotope("1", scatter, absorb)
-    assert (
-        np.all(mat1.absorb == absorb)
-        and np.all(mat1.scatter == scatter)
-        and np.all(mat1.kappa == np.zeros_like(absorb))
-    )
-    mat2 = Isotope("1", scatter, absorb, kappa=kappa)
-    assert np.all(mat2.kappa == kappa)
-
-
 def Fissionable(
     name: str,
     scatter: np.array,

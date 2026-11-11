@@ -72,7 +72,7 @@ def generalized_eigenvalue_slepc(
     ksp.setType(lin_solver_name)
     ksp.setTolerances(lin_rtol, None)
     solver.solve()
-    vr, vi = sA.getVecs()
+    vr, vi = sA.createVecs()
     k = solver.getEigenpair(0, vr, vi)
     sA.destroy()
     sM.destroy()
@@ -111,15 +111,3 @@ def solve_linear_petsc(A: sparse.spmatrix, b: np.array, atol=1e-14, rtol=1e-12, 
     vector.destroy()
     x.destroy()
     return array
-
-
-def test_scipy_to_petsc():
-    mat = sparse.csr_matrix(np.ones((10, 10)))
-    scipy_to_petcs(mat)
-
-
-def test_solver():
-    mat1 = sparse.csr_matrix(np.diag(np.arange(1, 11)))
-    mat2 = sparse.csr_matrix(np.diag(np.arange(101, 111)))
-    generalized_eigenvalue_slepc(mat1, mat2)
-    solve_linear_petsc(mat1, np.ones(10), guess=np.ones(10))

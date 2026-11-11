@@ -80,7 +80,7 @@ def solve_k_nem(system: Core, settings: NEMSettings) -> Tuple[float, np.array]:
         settings.initial_flux,
         settings.k_tol,
         settings.flux_rtol,
-        settings.flux_rtol,
+        settings.flux_atol,
         settings.lin_solve_rtol,
         settings.lin_solve_atol,
         settings.max_iter,
@@ -121,7 +121,7 @@ def solve_source_nem(system: Core, settings: NEMSettings, source: np.array) -> n
     core = mesh_refinement(system, settings.split) if settings.split else system
     if settings.initial_coupling is not None:
         core.current_calc.coupling = settings.initial_coupling
-    refined_source = system.geometry.array_refine(source, settings.split)
+    refined_source = system.geometry.array_refine(source, settings.split) if settings.split else source
     solver = GeneratorNemCMFDSource(
         core,
         refined_source,
@@ -130,7 +130,7 @@ def solve_source_nem(system: Core, settings: NEMSettings, source: np.array) -> n
         settings.initial_flux,
         settings.k_tol,
         settings.flux_rtol,
-        settings.flux_rtol,
+        settings.flux_atol,
         settings.lin_solve_rtol,
         settings.lin_solve_atol,
         settings.max_iter,

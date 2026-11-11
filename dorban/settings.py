@@ -65,7 +65,7 @@ class Settings:
             "lin_rtol": self.lin_solve_rtol,
             "atol_vector": self.flux_atol,
             "rtol_vector": self.flux_rtol,
-            "tol_value": self.k_tol,
+            "atol_eigenvalue": self.k_tol,
             "k": self.initial_k,
             "v": self.initial_flux,
         }
