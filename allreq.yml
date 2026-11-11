@@ -1,4 +1,5 @@
 dependencies:
+  - pip
   - numpy
   - scipy
   - slepc4py
