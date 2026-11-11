@@ -420,7 +420,7 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
             return True
         return (
             np.linalg.norm(self.source + self.F @ u - self.M @ u) < self.rtol_vector * np.linalg.norm(u)
-            and not np.all(self.current_calc.coupling) == 0
+            and not np.all(self.current_calc.coupling == 0)
         ) or self.iter > self.max_iter
 
 
