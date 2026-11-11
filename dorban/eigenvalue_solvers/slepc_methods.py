@@ -6,9 +6,12 @@ import scipy.sparse as sparse
 import slepc4py.SLEPc as slepc
 
 _OPTIONS_PREFIX = "dorban_eps_"
+# below this number of unknowns the linear problems are solved directly: algebraic multigrid gains nothing there and
+# its setup can break down on very small problems
+_DIRECT_SOLVE_SIZE = 20000
 
 
-def _inner_solver_options(solver_name, lin_solver_name, pc_name, groups, lin_rtol) -> dict:
+def _inner_solver_options(solver_name, lin_solver_name, pc_name, groups, lin_rtol, size) -> dict:
     """
     PETSc options for the linear solves inside the eigenvalue solver: the solves with M for Krylov-Schur,
     the correction equation for Jacobi-Davidson.
@@ -22,6 +25,8 @@ def _inner_solver_options(solver_name, lin_solver_name, pc_name, groups, lin_rto
         if pc_name is not None:
             options["st_pc_type"] = pc_name
         return options
+    if size < _DIRECT_SOLVE_SIZE:
+        return {"st_ksp_type": "preonly", "st_pc_type": "lu"}
     if groups is not None and groups > 1:
         # With only down-scatter, M is block lower triangular by energy group and solving one group after the
         # other is exact. Each group is a diffusion operator, solved with multigrid. With up-scatter this is a
@@ -79,7 +84,8 @@ def generalized_eigenvalue_slepc(
      during the application of the eigenvalue solution
      algorithm, for a full list see the petsc manual,
      the useful ones are bcgsl, gmres, lgmres and preonly.
-     If neither lin_solver_name nor pc_name is given, a default is chosen, see groups.
+     If neither lin_solver_name nor pc_name is given, a default is chosen: a direct solve (LU) for fewer than
+     20000 unknowns, otherwise see groups.
     pc_name: str
      the name of the preconditioner to use during the KSP application,
      if None then the default of the chosen KSP is used.
@@ -89,8 +95,8 @@ def generalized_eigenvalue_slepc(
      this way direct solvers can be used, for example with pc_name=lu
     groups: Optional[int]
      The number of energy groups, when the unknowns are ordered by cell and then by energy group.
-     If given (and neither lin_solver_name nor pc_name is), the linear problems are solved one energy group
-     after the other, each with algebraic multigrid. Otherwise GMRES with algebraic multigrid is used.
+     If given (and neither lin_solver_name nor pc_name is), problems of 20000 unknowns or more are solved one energy
+     group after the other, each with algebraic multigrid. Otherwise GMRES with algebraic multigrid is used.
 
     Returns
     -------
@@ -98,7 +104,7 @@ def generalized_eigenvalue_slepc(
      the maximal eigenvalue and its eigenvector
     """
     max_iter = None if max_iter == np.inf else max_iter
-    options = _inner_solver_options(solver_name, lin_solver_name, pc_name, groups, lin_rtol)
+    options = _inner_solver_options(solver_name, lin_solver_name, pc_name, groups, lin_rtol, A.shape[0])
     database = petsc.Options()
     for key, value in options.items():
         database[_OPTIONS_PREFIX + key] = value

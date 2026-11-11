@@ -91,3 +91,15 @@ def test_eigenvector_sign_is_positive(solver, negative_guess):
     guess = -np.ones(30) if negative_guess else None
     _, v = solver(A, M, v=guess)
     assert np.all(v > 0)
+
+
+@pytest.mark.parametrize("groups", [None, 1])
+def test_slepc_solves_a_tiny_problem(groups):
+    # algebraic multigrid broke down while setting up on this 2 x 2 problem (from a NEM first guess); small problems
+    # are solved directly
+    A = csr_matrix(np.diag([1.5, 1.5]))
+    M = csr_matrix(np.array([[2.25, -1.0], [-1.0, 4.596]]))
+    k, v = generalized_eigenvalue_slepc(A, M, groups=groups)
+    expected = np.max(np.linalg.eigvals(np.linalg.solve(M.toarray(), A.toarray())))
+    assert k == pytest.approx(expected, rel=1e-10)
+    assert np.allclose(A @ v, k * (M @ v))
