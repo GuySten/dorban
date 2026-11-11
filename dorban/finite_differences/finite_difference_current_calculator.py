@@ -7,8 +7,7 @@ from typing import Sequence
 import numpy as np
 
 from dorban.current_calculator import CurrentCalculator
-from dorban.geometry.boundary_conditions import Boundary
-from dorban.geometry.geometry import FiniteGeometry
+from dorban.geometry.geometry import FiniteGeometry, faces_between_original_cells
 from dorban.system import IsotopeData
 
 
@@ -187,18 +186,9 @@ class DiscontinuityCurrentCalculator(CurrentCalculator):
         DiscontinuityCurrentCalculator
          new current calculator compatible with the refined geometry
         """
-        assemblies = geometry.array_refine(np.arange(0, stop=geometry.cells), split).astype(int)
-        df = np.array(
-            [
-                [
-                    self.df[assemblies[cell]][face]
-                    if ((not isinstance(neighbor, Boundary)) and assemblies[cell] != assemblies[neighbor])
-                    else np.ones_like(self.df[assemblies[cell]][face])
-                    for face, neighbor in enumerate(neighbors)
-                ]
-                for cell, neighbors in enumerate(refgeo.neighbors)
-            ]
-        )
+        # the faces between the original cells keep their discontinuity factors
+        assemblies, across = faces_between_original_cells(geometry, split, refgeo)
+        df = np.where(across[:, :, None], np.asarray(self.df)[assemblies], 1.0)
         return self.__class__(geometry.array_refine(self.dc, split, axis=0), df)
 
     @classmethod

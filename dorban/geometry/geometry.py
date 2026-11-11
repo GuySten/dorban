@@ -230,6 +230,21 @@ class FiniteGeometry(Protocol):
         raise NotImplementedError
 
 
+def faces_between_original_cells(geometry: FiniteGeometry, split, refined: FiniteGeometry):
+    """
+    For a refinement of geometry into refined by split: the original cell of each refined cell, and whether each
+    face of each refined cell lies between two original cells (an array of shape refined cells x faces). Faces on
+    the boundary and inside an original cell are False.
+    """
+    original = geometry.array_refine(np.arange(geometry.cells), split).astype(int)
+    neighbors = refined.face_neighbors()
+    inside = neighbors >= 0
+    across = np.zeros(neighbors.shape, dtype=bool)
+    cells = np.broadcast_to(np.arange(neighbors.shape[0])[:, None], neighbors.shape)
+    across[inside] = original[cells[inside]] != original[neighbors[inside]]
+    return original, across
+
+
 class Point:
     """
     class that represents 0 dimensional geometry

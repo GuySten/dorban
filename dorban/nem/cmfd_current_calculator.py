@@ -8,8 +8,7 @@ from typing import Optional, Sequence
 import numba
 import numpy as np
 
-from dorban.geometry.boundary_conditions import Boundary
-from dorban.geometry.geometry import FiniteGeometry
+from dorban.geometry.geometry import FiniteGeometry, faces_between_original_cells
 from dorban.system import IsotopeData
 
 
@@ -84,15 +83,11 @@ class CMFDCurrentCalculator:
          new current calculator compatible with the refined geometry
         """
 
-        df = np.ones_like(geo.array_refine(self.df, split, axis=0))
-        coupling = np.zeros_like(geo.array_refine(self.coupling, split, axis=0))
-        assemblies = geo.array_refine(np.arange(0, stop=geo.cells), split).astype(int)
-        for cell, neighbors in enumerate(refgeo.neighbors):
-            for face, neighbor in enumerate(neighbors):
-                if not isinstance(neighbor, Boundary):
-                    if assemblies[cell] != assemblies[neighbor]:
-                        df[cell][face] = self.df[assemblies[cell]][face]
-                        coupling[cell][face] = self.coupling[assemblies[cell]][face]
+        # the faces between the original cells keep their discontinuity factors and coupling coefficients
+        assemblies, across = faces_between_original_cells(geo, split, refgeo)
+        across = across[:, :, None]
+        df = np.where(across, self.df[assemblies], 1.0)
+        coupling = np.where(across, self.coupling[assemblies], 0.0)
         return self.__class__(geo.array_refine(self.dc, split, axis=0), self.dim, coupling, df)
 
     @classmethod
