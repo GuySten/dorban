@@ -3,11 +3,16 @@ tests for the various eigensolvers
 """
 
 import numpy as np
+from scipy import sparse
 from scipy.sparse import csr_matrix
 
 from dorban.eigenvalue_solvers.arnoldi_arpack import generalized_arnoldi
 from dorban.eigenvalue_solvers.power_iteration import generalized_eigenvalue
-from dorban.eigenvalue_solvers.slepc_methods import generalized_eigenvalue_slepc
+from dorban.eigenvalue_solvers.slepc_methods import (
+    generalized_eigenvalue_slepc,
+    scipy_to_petcs,
+    solve_linear_petsc,
+)
 
 
 def test_generalized_eigenvalue():
@@ -24,3 +29,15 @@ def test_generalized_eigenvalue():
     assert np.isclose(k2, 13.25)
     assert np.allclose(v1, v)
     assert np.allclose(v2, v)
+
+
+def test_scipy_to_petsc():
+    mat = sparse.csr_matrix(np.ones((10, 10)))
+    scipy_to_petcs(mat)
+
+
+def test_solver():
+    mat1 = sparse.csr_matrix(np.diag(np.arange(1, 11)))
+    mat2 = sparse.csr_matrix(np.diag(np.arange(101, 111)))
+    generalized_eigenvalue_slepc(mat1, mat2)
+    solve_linear_petsc(mat1, np.ones(10), guess=np.ones(10))

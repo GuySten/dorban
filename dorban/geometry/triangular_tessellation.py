@@ -571,12 +571,6 @@ class Triangle:
         return left_boundary[row_after_ref - 1] + place_after_reflection
 
 
-def test_reflection():
-    tri = Triangle(3)
-    assert tri.reflect_over_face(5, 1) == 2
-    assert tri.reflect_over_face(3, 0) == 1
-
-
 def hex2triangles(neighbors: Sequence[Sequence[int]]) -> Sequence[Sequence[int]]:
     r"""
     Function gets a list of neighbors of hexagonal cells and transforms it to

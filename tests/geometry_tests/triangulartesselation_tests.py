@@ -7,6 +7,7 @@ from pytest import fixture
 
 from dorban.geometry.boundary_conditions import Void
 from dorban.geometry.triangular_tessellation import (
+    Triangle,
     TriangularTessellation,
     hex2triangles,
 )
@@ -26,3 +27,9 @@ def test_refinment(example_triangular):
     geo = geo.refine_mesh(split)
     assert geo.cells == 72
     assert np.all(geo.lengths == [2, 1, 1])
+
+
+def test_reflection():
+    tri = Triangle(3)
+    assert tri.reflect_over_face(5, 1) == 2
+    assert tri.reflect_over_face(3, 0) == 1
