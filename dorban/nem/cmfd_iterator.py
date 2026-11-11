@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 def boundary_conditions_numbering(boundary: Boundary) -> int:
-    """
+    r"""
     Function that assigns a negative number to any supported boundary condition type.
     Boundary conditions of the form :math:`J=\alpha\phi` at the boundary, Void and ExtrapolationLength, are assigned
     the number -1; the value of :math:`\alpha` of each face is given by :func:`boundary_albedos`.
