@@ -336,7 +336,8 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
     ----------
     core: Core
     source: np.array
-     The source of the problem.
+     The source of the problem: the total source in each cell and energy group (the source density times the
+     cell volume), not a density, organized by cell and then by energy group.
     cmfd_max_iter: int
      the maximal number allowed of CMFD iterations without coefficients update. Default is 0,
      meaning after each iteration the coupling coefficients are updated.
@@ -387,6 +388,9 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
         return 1, u
 
     def update_coupling(self):
+        # self.source is the total source in each cell, as in the volume integrated CMFD equations,
+        # while the two-cell NEM equations balance it against reaction rates per unit volume.
+        source_density = self.source / np.repeat(self.volumes, self.materials_data.shape[2])
         self.current_calc.coupling = update_coupling_coefficients(
             self.dim,
             self.materials_data,
@@ -398,7 +402,7 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
             self.current_calc.coupling,
             self.v,
             self.k,
-            self.source,
+            source_density,
         )
 
     def should_stop(self, k, u):
@@ -408,6 +412,9 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
         In the second case a warning is raised.
         The CMFD algorithm is unstable if the flux is negative in any cell,
         so the iteration is stopped before it loses stability.
+        The tolerances are achieved when the CMFD equations are solved and the flux changed by less than the
+        relative tolerance since the previous iteration. The CMFD residual alone is not enough: without fission
+        the CMFD equations are solved exactly at every iteration, before the coupling coefficients have converged.
         """
         if self.iter <= 2:
             return False
@@ -420,7 +427,8 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
             return True
         return (
             np.linalg.norm(self.source + self.F @ u - self.M @ u) < self.rtol_vector * np.linalg.norm(u)
-            and not np.all(self.current_calc.coupling) == 0
+            and np.linalg.norm(u - self.v) < self.rtol_vector * np.linalg.norm(u)
+            and not np.all(self.current_calc.coupling == 0)
         ) or self.iter > self.max_iter
 
 
