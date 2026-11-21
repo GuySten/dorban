@@ -3,14 +3,19 @@ tests for the various eigensolvers
 """
 
 import numpy as np
+import petsc4py.PETSc as petsc
 import pytest
+import scipy.linalg
 from scipy import sparse
 from scipy.sparse import csr_matrix
 
 from dorban.eigenvalue_solvers.arnoldi_arpack import generalized_arnoldi
 from dorban.eigenvalue_solvers.power_iteration import generalized_eigenvalue
 from dorban.eigenvalue_solvers.slepc_methods import (
+    _petsc_options,
+    energy_group_blocks,
     generalized_eigenvalue_slepc,
+    linear_solve_options,
     scipy_to_petcs,
     solve_linear_petsc,
 )
@@ -76,3 +81,78 @@ def test_solve_linear_petsc_raises_when_not_converged():
     mat = _laplacian_2d(10)
     with pytest.raises(RuntimeError, match="did not converge"):
         solve_linear_petsc(mat, np.ones(mat.shape[0]), max_it=1)
+
+
+def _slab_matrices(scatter, cells=200, width=1.0):
+    """
+    Finite differences matrices A (production) and M (loss) of a homogeneous four group slab with zero flux outside,
+    ordered by cell and then by energy group. scatter[i, j] is the scattering from group j to group i.
+    """
+    absorb = np.array([0.005, 0.01, 0.03, 0.08])
+    diffusion = np.array([1.8, 1.2, 0.8, 0.4])
+    production = np.outer([1, 0, 0, 0], [0.003, 0.004, 0.03, 0.08])
+    laplacian = sparse.diags([-1.0, 2.0, -1.0], [-1, 0, 1], shape=(cells, cells)) / width**2
+    removal = np.diag(absorb + scatter.sum(axis=0)) - scatter
+    M = sparse.kron(laplacian, np.diag(diffusion)) + sparse.kron(sparse.identity(cells), removal)
+    A = sparse.kron(sparse.identity(cells), production)
+    return A.tocsr(), M.tocsr()
+
+
+DOWN_SCATTER = np.array([[0, 0, 0, 0], [0.02, 0, 0, 0], [0, 0.015, 0, 0], [0, 0, 0.05, 0]])
+UP_SCATTER = DOWN_SCATTER + np.array([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0.01], [0, 0, 0, 0]])
+
+
+@pytest.mark.parametrize(
+    "scatter, adjoint, blocks",
+    [
+        (DOWN_SCATTER, False, [[0], [1], [2], [3]]),
+        (DOWN_SCATTER, True, [[3], [2], [1], [0]]),
+        (UP_SCATTER, False, [[0], [1], [2, 3]]),
+        (UP_SCATTER, True, [[2, 3], [1], [0]]),
+    ],
+)
+def test_energy_group_blocks_follow_the_scattering(scatter, adjoint, blocks):
+    # M is block lower triangular in the order of the blocks, and groups coupled by up-scatter are solved together
+    _, M = _slab_matrices(scatter, cells=5)
+    assert energy_group_blocks(M.T if adjoint else M, 4) == blocks
+
+
+@pytest.mark.parametrize("scatter", [DOWN_SCATTER, UP_SCATTER], ids=["down-scatter", "up-scatter"])
+@pytest.mark.parametrize("adjoint", [False, True])
+def test_group_by_group_solve_finds_the_eigenvalue(scatter, adjoint):
+    A, M = _slab_matrices(scatter)
+    if adjoint:
+        A, M = A.T.tocsr(), M.T.tocsr()
+    options = linear_solve_options("krylovschur", None, None, 4, 1e-12, M)
+    assert options["st_pc_type"] == "fieldsplit"
+    exact = np.max(np.abs(scipy.linalg.eigvals(A.toarray(), M.toarray())))
+    k, _ = generalized_eigenvalue_slepc(A, M, groups=4)
+    assert k == pytest.approx(exact, rel=1e-9)
+
+
+def test_slepc_finds_the_eigenvalue_when_only_a_preconditioner_is_given():
+    # pc_name alone used to leave SLEPc's default Krylov method, preonly, which applies the preconditioner once
+    # instead of solving: k came out 0.00043 instead of 0.0106. It must be used with GMRES.
+    A, M = _slab_matrices(DOWN_SCATTER)
+    exact = np.max(np.abs(scipy.linalg.eigvals(A.toarray(), M.toarray())))
+    k, _ = generalized_eigenvalue_slepc(A, M, groups=4, pc_name="jacobi")
+    assert k == pytest.approx(exact, rel=1e-9)
+
+
+def test_generalized_davidson_rejects_a_linear_solver():
+    # Generalized Davidson only applies the preconditioner, a linear solver would be ignored
+    A, M = _slab_matrices(DOWN_SCATTER, cells=5)
+    with pytest.raises(ValueError, match="gd"):
+        generalized_eigenvalue_slepc(A, M, solver_name="gd", lin_solver_name="gmres")
+
+
+def test_petsc_options_are_restored():
+    database = petsc.Options()
+    database["test_dorban_kept"] = "user value"
+    with pytest.raises(RuntimeError):
+        with _petsc_options({"kept": "ours", "added": "ours"}, prefix="test_dorban_"):
+            assert database.getString("test_dorban_kept") == "ours"
+            raise RuntimeError
+    assert database.getString("test_dorban_kept") == "user value"
+    assert not database.hasName("test_dorban_added")
+    database.delValue("test_dorban_kept")
