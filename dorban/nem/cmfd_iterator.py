@@ -432,7 +432,7 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
         ) or self.iter > self.max_iter
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def update_coupling_coefficients(
     dim: int,
     mat_data: np.array,
@@ -479,7 +479,6 @@ def update_coupling_coefficients(
      The source, in an eigenvalue problem is zero.
     """
     E = mat_data.shape[2]
-    es = energy_slice
     ns = other_axi
     leak = leakage(neighbors_array, distances, surface_areas, dc, df, coupling, E, v, dim)
     for cell, neighbors in enumerate(neighbors_array):
@@ -493,7 +492,6 @@ def update_coupling_coefficients(
                 coupling[cell, face] = _coupling_between_two_cells(
                     E,
                     v,
-                    es,
                     distances,
                     cell,
                     neighbor,
@@ -517,7 +515,6 @@ def update_coupling_coefficients(
                 coupling[cell, face] = _coupling_between_cell_and_void(
                     E,
                     v,
-                    es,
                     distances,
                     cell,
                     face,
@@ -579,7 +576,6 @@ def length_and_leakage(
 def _coupling_between_two_cells(
     E,
     v,
-    es,
     distances,
     cell,
     neighbor,
@@ -616,8 +612,8 @@ def _coupling_between_two_cells(
     l_righter, leakage_righter = length_and_leakage(distances, leak, neighbor, righter, axis, t_axi)
     rhs = nem_rhs(
         E,
-        v[es(cell, E)],
-        v[es(neighbor, E)],
+        v[energy_slice(cell, E)],
+        v[energy_slice(neighbor, E)],
         cells_axi_energy_slice(leak, cell, t_axi),
         _absorb(mat_data[cell]),
         _absorb(mat_data[neighbor]),
@@ -633,8 +629,8 @@ def _coupling_between_two_cells(
         l_right,
         l_left,
         l_righter,
-        source[es(cell, E)],
-        source[es(neighbor, E)],
+        source[energy_slice(cell, E)],
+        source[energy_slice(neighbor, E)],
     )
     poly_exp = np.linalg.solve(mat, rhs)
     current = current_from_poly_exp(
@@ -642,8 +638,8 @@ def _coupling_between_two_cells(
     )
     return compute_coupling_coefficients(
         current,
-        v[es(cell, E)],
-        v[es(neighbor, E)],
+        v[energy_slice(cell, E)],
+        v[energy_slice(neighbor, E)],
         dc[cell],
         dc[neighbor],
         2 * distances[cell, 2 * axis],
@@ -657,7 +653,6 @@ def _coupling_between_two_cells(
 def _coupling_between_cell_and_void(
     E,
     v,
-    es,
     distances,
     cell,
     face,
@@ -694,7 +689,7 @@ def _coupling_between_cell_and_void(
         _nufission(mat_data[cell]) / k,
         void_boundary_equation,
     )
-    flux = v[es(cell, E)]
+    flux = v[energy_slice(cell, E)]
     rhs = nem_boundary_rhs(
         E,
         flux,
@@ -707,15 +702,15 @@ def _coupling_between_cell_and_void(
         2 * distances[cell, 2 * axis],
         l_right,
         l_left,
-        source[es(cell, E)],
+        source[energy_slice(cell, E)],
         -flux / 2,
     )
     poly_exp = np.linalg.solve(mat, rhs)
     current = current_from_poly_exp(E, poly_exp, dc[cell], 2 * distances[cell, 2 * axis], 1)
-    return boundary_coupling_coefficient(current, v[es(cell, E)], np.full(E, 1 / 2))
+    return boundary_coupling_coefficient(current, v[energy_slice(cell, E)], np.full(E, 1 / 2))
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _nufission(data: np.array):
     E = data.shape[1]
     if np.all(data[E + 3] == 0):
@@ -723,7 +718,7 @@ def _nufission(data: np.array):
     return np.outer(data[E + 3] / np.sum(data[E + 3]), data[E + 2])
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _absorb(data: np.array):
     E = data.shape[1]
     return np.diag(data[E + 1]) - data[:E, :]

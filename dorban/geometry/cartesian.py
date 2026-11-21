@@ -28,7 +28,7 @@ def _neighbors_calc(x, y, z, cells, boundary, dim) -> list[list[int]]:
     return neigh
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _calc(x, y, z, boundary, dim, cor, n):
     right, left = n + 1, n - 1
     forward, back = n + x, n - x
@@ -53,7 +53,7 @@ def _calc(x, y, z, boundary, dim, cor, n):
     return _return_neighbors(left, right, back, forward, down, up, dim)
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _return_neighbors(left, right, back, forward, down, up, dim):
     if dim == 1:
         return [left, right]

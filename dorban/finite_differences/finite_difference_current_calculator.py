@@ -133,7 +133,7 @@ class CurrentCalculatorFD(CurrentCalculator):
         return cls(collect_diffusion_coefficients(isotopes, transport))
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _compute(cell, E, neighbor, D1, D2, l1, l2, surface_area):
     row_indices = np.hstack((np.arange(cell * E, (cell + 1) * E), np.arange(cell * E, (cell + 1) * E)))
     col_indices = np.hstack((np.arange(neighbor * E, (neighbor + 1) * E), np.arange(cell * E, (cell + 1) * E)))
@@ -317,7 +317,7 @@ def collect_diffusion_coefficients(isotopes: IsotopeData, transport: bool) -> np
     return np.vstack([relevant_data(isotope) for isotope in isotopes])
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def _compute_with_discontinuity(cell, E, neighbor, D1, D2, l1, l2, surface_area, df1, df2):
     row_indices = np.hstack((np.arange(cell * E, (cell + 1) * E), np.arange(cell * E, (cell + 1) * E)))
     col_indices = np.hstack((np.arange(neighbor * E, (neighbor + 1) * E), np.arange(cell * E, (cell + 1) * E)))

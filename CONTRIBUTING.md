@@ -36,6 +36,23 @@ of your contribution to meet the community's needs.
 Such changes, suggestions and requests should always follow the Code of Conduct, as well as your own
 contribution. Please report any unacceptable behavior during the review process if you encounter it.
 
+## Running the tests
+
+The compiled (numba) functions are cached in `__pycache__` directories, so a new Python process does not
+compile them again. Numba recompiles a cached function only when the file that defines it changes, not when a
+function it calls from another file changes. For example, the functions in `dorban/nem/cmfd_iterator.py` call
+functions from `dorban/nem/two_node.py`; after a change to `two_node.py` alone, they keep running the old
+compiled code, with wrong results and no error. This happens both after editing such a file and after switching
+branches.
+
+When results look stale, delete the cache:
+
+```
+find . -name "*.nbi" -delete -o -name "*.nbc" -delete
+```
+
+or run with a fresh cache directory, e.g. `NUMBA_CACHE_DIR=$(mktemp -d) pytest`.
+
 ## Code Style
 
 We currently don't have a written-down style guide, and we should get around to it.

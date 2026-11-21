@@ -73,7 +73,7 @@ def restore_array(array: np.array, black_absorber: np.array) -> np.array:
     return np.fromiter(resiter, array.dtype, count=length)
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def vertex_in_neighbor(vertex: int, face: int) -> int:
     """
     function that gets an index of a vertex and a face adn returns the index of
@@ -212,7 +212,7 @@ def insert_black_absorber(
     return cell - bisect_left(black, cell)
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def sparse_columns(size: int, E: int):
     """
     Function to generate the column indices of the values of a sparse matrix
@@ -279,7 +279,7 @@ def collapse_flux(geometry: FiniteGeometry, fine_flux: np.array, fine_volumes: n
     return np.bincount(assemblies_with_energy, normalized_fine_flux)
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def op_face(face: int) -> int:
     """
     Returns the number of the opposite face to the given face.

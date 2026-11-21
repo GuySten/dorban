@@ -9,7 +9,7 @@ import numba
 import numpy as np
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def cells_axi_energy_slice(array: np.array, cell: int, axi: Sequence[int]) -> np.array:
     """
     Gets an array whose shape is Cells x 3 x Energy, number of a cell and numbers of axi,
@@ -33,7 +33,7 @@ def cells_axi_energy_slice(array: np.array, cell: int, axi: Sequence[int]) -> np
     return result
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def cells_axi_slice(array: np.array, cell: int, axi: Sequence[int]) -> np.array:
     """
     Gets an array whose shape is Cells x 3, number of a cell and numbers of axi,
@@ -57,7 +57,7 @@ def cells_axi_slice(array: np.array, cell: int, axi: Sequence[int]) -> np.array:
     return result
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def compute_coupling_coefficients(
     current: np.array,
     flux1: np.array,
@@ -110,7 +110,7 @@ def compute_coupling_coefficients(
     )
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def boundary_coupling_coefficient(current: np.array, flux: np.array, boundary_coef: np.array) -> np.array:
     r"""
     Computes the CMFD coupling coefficient between a cell and a boundary.
@@ -136,7 +136,7 @@ def boundary_coupling_coefficient(current: np.array, flux: np.array, boundary_co
     return current / flux - boundary_coef
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def current_from_poly_exp(E: int, poly_exp: np.array, D: np.array, ll: float, face: int) -> np.array:
     r"""
     computes the current at a boundary of a cell from the coefficients of the degree 4 polynomial used to represent the
@@ -176,12 +176,12 @@ def current_from_poly_exp(E: int, poly_exp: np.array, D: np.array, ll: float, fa
     )
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def energy_slice(cell, E):
     return np.arange(cell * E, cell * E + E)
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def other_axi(j: int, dim: int) -> np.array:
     """
     Returns the numbers of the axi which aren't equal to j.
@@ -210,7 +210,7 @@ def other_axi(j: int, dim: int) -> np.array:
             return np.array([0])
 
 
-@numba.njit()
+@numba.njit(cache=True)
 def cell_indices_in_two_cell_system(E: int) -> np.array:
     """
     Returns the indices of the first cell in the two node system solved in the updating of the CMFD coupling coefficients.
