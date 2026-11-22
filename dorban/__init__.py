@@ -32,6 +32,7 @@ from dorban.geometry import (
     AlbedoBoundary as AlbedoBoundary,
     Boundary as Boundary,
     Cartesian as Cartesian,
+    Cylindrical as Cylindrical,
     FiniteGeometry as FiniteGeometry,
     Reflector as Reflector,
     TriangularTessellation as TriangularTessellation,

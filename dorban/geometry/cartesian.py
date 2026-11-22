@@ -2,8 +2,9 @@
 Contains the Cartesian Geometry class
 """
 
+from abc import abstractmethod
 from bisect import bisect_right
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Optional, Protocol, Self, Sequence, Tuple, Union
 
 import numba
 import numpy as np
@@ -63,60 +64,23 @@ def _return_neighbors(left, right, back, forward, down, up, dim):
         return [left, right, back, forward, down, up]
 
 
-class Cartesian(FiniteGeometry):
+class RectilinearGrid(FiniteGeometry, Protocol):
     r"""
-    class that represents cartesian geometry.
+    Protocol of the geometries whose cells are the products of intervals along each axis: a grid of
+    :math:`x\cdot y\cdot z` cells, the lengths of the intervals given along each axis.
 
-    Any cartesian geometry can be embedded in a large cube. This class can be
-    used to describe a cartesian geometry by defining the large cube and filling
-    the difference between the cube and the desired geometry with black absorber.
-    The cells of the cube are numbered from left to right then from back to front
-    and then from bottom to top, like in the following 2d example::
+    The cells of the grid are numbered from left to right then from back to front and then from bottom to top, like
+    in the following 2d example::
 
     4 5 6 7
 
     0 1 2 3
 
-    The cells of the geometry are numbered by removing the numbers of the black absorbers
-    of the cube and using the order of cells of the cube.
-
-    A Cartesian geometry can be transformed to
-    :class:`PolyBox <dorban.geometry.polybox.PolyBox>`
-    using the to_polybox method.
-
-    Parameters
-    ----------
-    lengths: Sequence[np.array]
-     sequence which contains arrays of the lengths of the cells along each axis.
-     The length of this sequence os the dimension of the geometry
-    boundary_condition: Sequence[Boundary]
-     sequences that contains the type of boundary condition
-     on each side (left,right,forward,back,up,down).
-     The length of this sequence is twice the dimension of the system.
-    black_absorber: Optional[Sequence[int]]
-     list that contains the numbers of cells of the cube
-     that are filled with black absorber.
-
-    Attributes
-    ----------
-    x: int
-     the number of cells along the x-axis
-    y: int
-     the number of cells along the y-axis
-    z: int
-     the number of cells along the z-axis
-    cells: int
-     the number of the cells, :math:`x\cdot y\cdot z`
-    dim: int
-     The dimension of the geometry
-    boundary: List[int]
-     list that contains the numbers of the cells that lay on the boundary.
-    neighbors: List[List[int]]
-     list that at index `i` has a list of the neighbors of the cell numbered i.
-
-    See Also
-    --------
-    :class:`PolyBox <dorban.geometry.polybox.PolyBox>`
+    Cells of the grid can be filled with black absorber; the cells of the geometry are numbered by removing them and
+    keeping the order of the grid. The numbering, the neighbors, the distances to the faces and the refinement are the
+    same for every such geometry, and its subclasses share this implementation of them; the volumes and the areas of
+    the faces, the metric, are given by the subclasses:
+    :class:`Cartesian` for boxes, :class:`~dorban.geometry.cylindrical.Cylindrical` for rings of a cylinder.
     """
 
     def __init__(
@@ -312,6 +276,7 @@ class Cartesian(FiniteGeometry):
         cor: Tuple[int, int, int] = self._coordinates(cell)
         return tuple(map(lambda i: self.lengths[i][cor[i]], range(self.dim)))
 
+    @abstractmethod
     def _volume(self, cell: int) -> float:
         """
         computes the volume of the cell.
@@ -321,9 +286,9 @@ class Cartesian(FiniteGeometry):
         cell: int
          the number of the cell
         """
-        lengths = self._lengths_cell(cell)
-        return np.prod(lengths)
+        raise NotImplementedError
 
+    @abstractmethod
     def surface_area(self, cell: int, face: int) -> float:
         """
         function to compute the surface area of a face of a cell
@@ -339,7 +304,7 @@ class Cartesian(FiniteGeometry):
         face: int
          the number of the face in the cell
         """
-        return self._volume(cell) / self._lengths_cell(cell)[face // 2]
+        raise NotImplementedError
 
     def distance_to_face(self, cell: int, face: int) -> float:
         """
@@ -440,9 +405,9 @@ class Cartesian(FiniteGeometry):
         )
         return refined_with_black[non_black_refined_indices]
 
-    def refine_mesh(self, split: List[Sequence[int]]) -> "Cartesian":
+    def refine_mesh(self, split: List[Sequence[int]]) -> Self:
         """
-        This function returns a new Cartesian Geometry with refined mesh
+        This function returns a new geometry of the same class with refined mesh
         according to the split data.
 
         Parameters
@@ -455,15 +420,15 @@ class Cartesian(FiniteGeometry):
 
         Returns
         -------
-        Cartesian
-         new Geometry with a refined mesh
+        Self
+         new Geometry of the same class with a refined mesh
         """
         black_absorber_refined = self.array_refine_with_black_absorber(
             np.array([i in self.black_absorber for i in range(self.x * self.y * self.z)]), split
         )
         black_absorber = list(i for i, x in enumerate(black_absorber_refined) if x)
         lengths = tuple(map(lambda i: np.repeat(self.lengths[i] / split[i], split[i]), range(self.dim)))
-        return Cartesian(lengths, self.boundary_conditions, black_absorber)
+        return type(self)(lengths, self.boundary_conditions, black_absorber)
 
     def uniform_split(self, subcells: int) -> Sequence[np.array]:
         """
@@ -483,6 +448,92 @@ class Cartesian(FiniteGeometry):
          Split data to be used with the Cartesian geometry.
         """
         return _uniform_split(subcells, (self.x, self.y, self.z)[: self.dim])
+
+
+class Cartesian(RectilinearGrid):
+    r"""
+    class that represents cartesian geometry.
+
+    Any cartesian geometry can be embedded in a large cube. This class can be
+    used to describe a cartesian geometry by defining the large cube and filling
+    the difference between the cube and the desired geometry with black absorber.
+    The cells of the cube are numbered from left to right then from back to front
+    and then from bottom to top, like in the following 2d example::
+
+    4 5 6 7
+
+    0 1 2 3
+
+    The cells of the geometry are numbered by removing the numbers of the black absorbers
+    of the cube and using the order of cells of the cube.
+
+    A Cartesian geometry can be transformed to
+    :class:`PolyBox <dorban.geometry.polybox.PolyBox>`
+    using the to_polybox method.
+
+    Parameters
+    ----------
+    lengths: Sequence[np.array]
+     sequence which contains arrays of the lengths of the cells along each axis.
+     The length of this sequence os the dimension of the geometry
+    boundary_condition: Sequence[Boundary]
+     sequences that contains the type of boundary condition
+     on each side (left,right,forward,back,up,down).
+     The length of this sequence is twice the dimension of the system.
+    black_absorber: Optional[Sequence[int]]
+     list that contains the numbers of cells of the cube
+     that are filled with black absorber.
+
+    Attributes
+    ----------
+    x: int
+     the number of cells along the x-axis
+    y: int
+     the number of cells along the y-axis
+    z: int
+     the number of cells along the z-axis
+    cells: int
+     the number of the cells, :math:`x\cdot y\cdot z`
+    dim: int
+     The dimension of the geometry
+    boundary: List[int]
+     list that contains the numbers of the cells that lay on the boundary.
+    neighbors: List[List[int]]
+     list that at index `i` has a list of the neighbors of the cell numbered i.
+
+    See Also
+    --------
+    :class:`PolyBox <dorban.geometry.polybox.PolyBox>`
+    """
+
+    def _volume(self, cell: int) -> float:
+        """
+        computes the volume of the cell.
+
+        Parameters
+        ----------
+        cell: int
+         the number of the cell
+        """
+        lengths = self._lengths_cell(cell)
+        return np.prod(lengths)
+
+    def surface_area(self, cell: int, face: int) -> float:
+        """
+        function to compute the surface area of a face of a cell
+        the faces are numbered according to the order
+        (left,right,forward,back,up,down)
+        face//2 is the number of the axis of the line from the center of the
+        cell to the face
+
+        Parameters
+        ----------
+        cell: int
+         the number of the cell
+        face: int
+         the number of the face in the cell
+        """
+        return self._volume(cell) / self._lengths_cell(cell)[face // 2]
 
     def to_polybox(self) -> PolyBox:
         """
