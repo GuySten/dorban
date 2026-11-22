@@ -64,10 +64,25 @@ class Reflector(Boundary):
         return np.zeros(0), np.zeros(0), np.zeros(0)
 
 
+def _albedo_boundary_coefficient(albedo, geometry, E, current_calc, cell: int, face: int):
+    r"""
+    Coefficient of the outgoing current through a face where :math:`J=\alpha\phi_s`, with :math:`\phi_s` the flux
+    at the face. The flux at the face is eliminated with the finite difference current between the center of the
+    cell and the face, :math:`J=D(\phi-\phi_s)/l`, which gives :math:`J=\phi/(1/\alpha+l/D)` where :math:`l` is the
+    distance from the center of the cell to the face.
+    """
+    distance = geometry.distance_to_face(cell, face)
+    return (
+        np.arange(cell * E, (cell + 1) * E),
+        np.arange(cell * E, (cell + 1) * E),
+        geometry.surface_area(cell, face) / (1 / albedo + distance / current_calc.dc[cell]),
+    )
+
+
 class ExtrapolationLength(Boundary):
     r"""
     class representing void boundary condition using the extrapolated length
-    approximation with the 0.4692 constant :math:`J=-0.4692\phi`
+    approximation with the 0.4692 constant :math:`J=-0.4692\phi` at the boundary
     """
 
     constant = 0.4692
@@ -78,17 +93,13 @@ class ExtrapolationLength(Boundary):
     def compute_boundary_coefficient(
         self, geometry, E, current_calc, cell: int, face: int
     ) -> Tuple[np.array, np.array, np.array]:
-        return (
-            np.arange(cell * E, (cell + 1) * E),
-            np.arange(cell * E, (cell + 1) * E),
-            np.full(E, self.constant * geometry.surface_area(cell, face)),
-        )
+        return _albedo_boundary_coefficient(self.constant, geometry, E, current_calc, cell, face)
 
 
 class Void(Boundary):
     r"""
     class representing void boundary condition based on the P1 approximation.
-    The equation on the current is :math:`J=-\frac{1}{2}\phi`
+    The equation on the current is :math:`J=-\frac{1}{2}\phi` at the boundary
     """
 
     def __init__(self):
@@ -97,11 +108,7 @@ class Void(Boundary):
     def compute_boundary_coefficient(
         self, geometry, E, current_calc, cell: int, face: int
     ) -> Tuple[np.array, np.array, np.array]:
-        return (
-            np.arange(cell * E, (cell + 1) * E),
-            np.arange(cell * E, (cell + 1) * E),
-            np.full(E, 0.5 * geometry.surface_area(cell, face)),
-        )
+        return _albedo_boundary_coefficient(0.5, geometry, E, current_calc, cell, face)
 
 
 class ZeroFlux(Boundary):

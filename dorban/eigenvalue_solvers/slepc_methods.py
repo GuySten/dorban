@@ -14,6 +14,7 @@ The linear solves inside the eigenvalue solver are configured through PETSc's op
     the solver of the i-th part of a fieldsplit preconditioner
 """
 
+import warnings
 from contextlib import contextmanager
 
 import numpy as np
@@ -22,6 +23,8 @@ import scipy.sparse as sparse
 import slepc4py.SLEPc as slepc
 
 _OPTIONS_PREFIX = "dorban_eps_"
+# below this number of unknowns the linear problems are solved directly, which is faster there than algebraic multigrid
+_DIRECT_SOLVE_SIZE = 20000
 
 
 @contextmanager
@@ -88,6 +91,11 @@ def _explicit_options(eps_type: str, ksp_type: str | None, pc_type: str | None) 
     return options
 
 
+def _direct_solve_options() -> dict:
+    """LU factorization of M, applied once (preonly): an exact solve."""
+    return {"st_ksp_type": "preonly", "st_pc_type": "lu"}
+
+
 def _group_by_group_options(blocks: list[list[int]], groups: int, lin_rtol: float) -> dict:
     """
     Solve the blocks of energy groups one after the other (multiplicative fieldsplit, block Gauss-Seidel), each with
@@ -116,14 +124,17 @@ def linear_solve_options(
     the correction equation for Jacobi-Davidson. The first that applies of:
 
     1. the linear solver or preconditioner the user gave (ksp_type, pc_type),
-    2. group by group (_group_by_group_options), when there are several energy groups and they are not all coupled
+    2. a direct solve, for fewer than _DIRECT_SOLVE_SIZE unknowns,
+    3. group by group (_group_by_group_options), when there are several energy groups and they are not all coupled
        by up-scatter,
-    3. GMRES with algebraic multigrid, on all the energy groups at once.
+    4. GMRES with algebraic multigrid, on all the energy groups at once.
 
     M is the matrix of the linear problems, numbered by cell and then by energy group (see energy_group_blocks).
     """
     if eps_type == "gd" or ksp_type is not None or pc_type is not None:
         return _explicit_options(eps_type, ksp_type, pc_type)
+    if M.shape[0] < _DIRECT_SOLVE_SIZE:
+        return _direct_solve_options()
     if groups is not None and groups > 1:
         blocks = energy_group_blocks(M, groups)
         if len(blocks) > 1:
@@ -170,7 +181,8 @@ def generalized_eigenvalue_slepc(
      during the application of the eigenvalue solution
      algorithm, for a full list see the petsc manual,
      the useful ones are bcgsl, gmres, lgmres and preonly.
-     If neither lin_solver_name nor pc_name is given, a default is chosen, see groups.
+     If neither lin_solver_name nor pc_name is given, a default is chosen: a direct solve (LU) for fewer than
+     20000 unknowns, otherwise see groups.
      With solver_name='gd' it must be None or preonly: Generalized Davidson only applies the preconditioner.
     pc_name: str
      the name of the preconditioner to use during the KSP application,
@@ -183,7 +195,7 @@ def generalized_eigenvalue_slepc(
     groups: int | None
      The number of energy groups, when the unknowns are ordered by cell and then by energy group. It describes M
      and does not choose a solver: lin_solver_name and pc_name, when given, take precedence over the default it
-     enables. That default solves the energy groups one after the other, with the groups coupled by up-scatter
+     enables. For 20000 unknowns or more, that default solves the energy groups one after the other, with the groups coupled by up-scatter
      together, each with algebraic multigrid (see energy_group_blocks). Without groups, GMRES with algebraic
      multigrid is used.
 
@@ -194,6 +206,39 @@ def generalized_eigenvalue_slepc(
     """
     max_iter = None if max_iter == np.inf else max_iter
     options = linear_solve_options(solver_name, lin_solver_name, pc_name, groups, lin_rtol, M)
+    try:
+        k, vector = _eigenpair(A, M, v, rtol_vector, lin_rtol, max_iter, solver_name, groups, options)
+    except (petsc.Error, SystemError) as error:
+        # petsc4py raises a PETSc error from a solve as a SystemError caused by it
+        petsc_error = error if isinstance(error, petsc.Error) else error.__cause__
+        chosen_by_user = solver_name == "gd" or lin_solver_name is not None or pc_name is not None
+        direct = _direct_solve_options()
+        if not isinstance(petsc_error, petsc.Error) or chosen_by_user or options == direct:
+            raise
+        # The setup of algebraic multigrid can break down: on a 2 x 2 problem, the short GMRES with which it
+        # estimates an eigenvalue to smooth its interpolation broke down exactly (PETSc error 91, "tt == 0.0").
+        warnings.warn(
+            f"The default linear solver of the eigenvalue problem failed (PETSc error {petsc_error.ierr}), "
+            "solving the linear problems directly instead",
+            RuntimeWarning,
+        )
+        k, vector = _eigenpair(A, M, v, rtol_vector, lin_rtol, max_iter, solver_name, groups, direct)
+    # the sign of an eigenvector is arbitrary: return it with a positive sum
+    return k, vector if np.sum(vector) >= 0 else -vector
+
+
+def _eigenpair(
+    A: sparse.spmatrix,
+    M: sparse.spmatrix,
+    v: np.ndarray | None,
+    rtol_vector: float,
+    lin_rtol: float,
+    max_iter: int | None,
+    solver_name: str,
+    groups: int | None,
+    options: dict,
+) -> tuple[float, np.array]:
+    """The dominant eigenpair of Av=kMv, with the given PETSc options for the linear solves."""
     sA = scipy_to_petcs(A)
     sM = scipy_to_petcs(M)
     if groups is not None and groups > 1:

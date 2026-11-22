@@ -181,9 +181,5 @@ def test_fuel_in_water(water, uranium):
     flux = flux / np.sum(flux)
     flux_analytic = flux_analytic / np.sum(flux_analytic)
     relative_error = np.abs((flux - flux_analytic) / flux_analytic)
-    fuel = slice(cells_water, cells_water + cells_fuel)
-    assert k == pytest.approx(k_analytic, abs=1e-8)
-    assert np.max(relative_error[fuel]) < 1e-4
-    # The Void boundary condition sets the outgoing current from the flux at the center of the outermost cell
-    # rather than at the boundary, which is first order in the cell size: 0.6% at the vacuum boundary here.
-    assert np.max(relative_error) < 1e-2
+    assert k == pytest.approx(k_analytic, abs=1e-10)
+    assert np.max(relative_error) < 1e-6
