@@ -59,8 +59,8 @@ def flux_with_given_boundary_current(system: Core, k: float, **kwargs) -> np.arr
     Parameters
     ----------
     system: Core
-        object that represents the system, the boundary conditions
-        should be KnownCurrent for this function to make sense
+        object that represents the system, the current through the boundary is given by KnownCurrent or
+        IncomingCurrent boundary conditions
     k: float
         the known eigenvalue
     kwargs
@@ -72,7 +72,7 @@ def flux_with_given_boundary_current(system: Core, k: float, **kwargs) -> np.arr
     """
     fission = 1 / k * fd.cmfd_fission(system)
     absorber = diffusion_matrix(system.geometry, system.E, system.current_calc) + fd.cmfd_absorption(system)
-    current = fd.boundary_current(system.geometry, system.E)
+    current = fd.boundary_current(system.geometry, system.E, system.current_calc)
     flux = la.bicgstab(absorber - fission, current, **kwargs)[0]
     assert np.all(flux > 0), f"The flux wasn't strictly positive! {flux}"
     return flux
