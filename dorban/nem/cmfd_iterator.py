@@ -533,15 +533,15 @@ def update_coupling_coefficients(
                 righter = neighbors_array[neighbor, face]
                 two_node_coupling(
                     coupling[cell, face], mat, rhs, E, dim, cell, neighbor, face, left, righter, v, dc, df, absorb,
-                    fission, source, leak, distances,
+                    fission, source, leak, distances, albedos,
                 )  # fmt: skip
                 for g in range(E):
                     coupling[neighbor, op_face(face), g] = -coupling[cell, face, g]
             elif neighbor < 0 and albedos[cell, face] > 0:
                 # a reflective face, albedo 0, has no current and its coupling coefficient stays 0
                 boundary_coupling(
-                    coupling[cell, face], mat, rhs, E, dim, cell, face, left, albedos[cell, face], v, dc, absorb,
-                    fission, source, leak, distances,
+                    coupling[cell, face], mat, rhs, E, dim, cell, face, left, albedos[cell, face],
+                    albedos[cell, op_face(face)], v, dc, absorb, fission, source, leak, distances,
                 )  # fmt: skip
     return coupling
 

@@ -79,9 +79,19 @@ def _fill_node(mat, rows, cols, E, ll, D, absorber, fission):
 
 
 @numba.njit(cache=True)
-def _neighbor_leakage(leak, cell, neighbor, transverse, g):
-    """The transverse leakage of the neighbor, or minus the cell's own across a boundary."""
-    return leak[neighbor, transverse, g] if neighbor >= 0 else -leak[cell, transverse, g]
+def _neighbor_leakage(leak, cell, neighbor, albedo, transverse, g):
+    """
+    The transverse leakage of the neighbor. Across a boundary, of the given albedo, the fake neighbor of the quadratic
+    transverse leakage fit: across a reflective boundary (albedo 0) the mirror image of the cell, with the cell's own
+    leakage (exact by symmetry); across the other boundaries (void, extrapolation length, zero flux) minus the cell's
+    own leakage, so that the fitted leakage vanishes near the face (where the flux, and with it the leakage, is small
+    or zero).
+    """
+    if neighbor >= 0:
+        return leak[neighbor, transverse, g]
+    if albedo == 0:
+        return leak[cell, transverse, g]
+    return -leak[cell, transverse, g]
 
 
 @numba.njit(cache=True)
@@ -91,10 +101,14 @@ def _neighbor_length(distances, cell, neighbor, axis):
 
 
 @numba.njit(cache=True)
-def _add_node_rhs(rhs, rows, E, dim, axis, flux, absorber, fission, source, leak, distances, cell, left, right):
+def _add_node_rhs(
+    rhs, rows, E, dim, axis, flux, absorber, fission, source, leak, distances, cell, left, right, left_albedo,
+    right_albedo,
+):  # fmt: skip
     """
     The right hand side of the three equations of a node (rows: their blocks), with its neighbors left and right
-    along the axis for the quadratic transverse leakage.
+    along the axis for the quadratic transverse leakage, and the albedos of the faces to them (used when a neighbor is
+    a boundary).
     """
     ll = 2 * distances[cell, 2 * axis]
     l_left = _neighbor_length(distances, cell, left, axis)
@@ -114,8 +128,8 @@ def _add_node_rhs(rhs, rows, E, dim, axis, flux, absorber, fission, source, leak
             leakage = leak[cell, transverse, g]
             p1, p2 = leakage_coefficients(
                 leakage,
-                _neighbor_leakage(leak, cell, left, transverse, g),
-                _neighbor_leakage(leak, cell, right, transverse, g),
+                _neighbor_leakage(leak, cell, left, left_albedo, transverse, g),
+                _neighbor_leakage(leak, cell, right, right_albedo, transverse, g),
                 ll,
                 l_left,
                 l_right,
@@ -152,8 +166,9 @@ def solve_in_place(mat, rhs, n):
 
 @numba.njit(cache=True)
 def two_node_coupling(
-    out, mat, rhs, E, dim, cell, neighbor, face, left, righter, v, dc, df, absorb, fission, source, leak, distances
-):
+    out, mat, rhs, E, dim, cell, neighbor, face, left, righter, v, dc, df, absorb, fission, source, leak, distances,
+    albedos,
+):  # fmt: skip
     r"""
     The coupling coefficient between a cell and its neighbor across the face (face // 2 is the axis, the neighbor is
     on the positive side), written to out: :math:`\hat{D}` such that the CMFD current equals the NEM current,
@@ -161,7 +176,8 @@ def two_node_coupling(
     .. math:: \hat{D}=\left(J_{NEM}-\frac{2D_1D_2(F_1\phi_1-F_2\phi_2)}{F_2D_1l_2+F_1D_2l_1}\right)(\phi_1+\phi_2)^{-1}
 
     left is the neighbor of the cell on its other side and righter the neighbor of the neighbor beyond it, for the
-    transverse leakage. mat (8E x 8E) and rhs (8E) are work arrays.
+    transverse leakage; albedos are the albedos of the faces, see :func:`dorban.nem.cmfd_iterator.boundary_albedos`.
+    mat (8E x 8E) and rhs (8E) are work arrays.
     """
     axis = face // 2
     opposite = face - 1
@@ -185,11 +201,11 @@ def two_node_coupling(
         rhs[row] = dis2 * flux2[g] - dis1 * flux1[g]
     _add_node_rhs(
         rhs, (0, 1, 4), E, dim, axis, flux1, absorb[cell], fission[cell], source[cell * E : cell * E + E], leak,
-        distances, cell, left, neighbor,
+        distances, cell, left, neighbor, albedos[cell, opposite], 0.0,
     )  # fmt: skip
     _add_node_rhs(
         rhs, (2, 3, 5), E, dim, axis, flux2, absorb[neighbor], fission[neighbor],
-        source[neighbor * E : neighbor * E + E], leak, distances, neighbor, cell, righter,
+        source[neighbor * E : neighbor * E + E], leak, distances, neighbor, cell, righter, 0.0, albedos[neighbor, face],
     )  # fmt: skip
     solve_in_place(mat, rhs, 8 * E)
     ll, ln = 2 * distances[cell, 2 * axis], 2 * distances[neighbor, 2 * axis]
@@ -203,7 +219,9 @@ def two_node_coupling(
 
 
 @numba.njit(cache=True)
-def boundary_coupling(out, mat, rhs, E, dim, cell, face, left, albedo, v, dc, absorb, fission, source, leak, distances):
+def boundary_coupling(
+    out, mat, rhs, E, dim, cell, face, left, albedo, left_albedo, v, dc, absorb, fission, source, leak, distances
+):
     r"""
     The coupling coefficient between a cell and a boundary of the form :math:`J=\alpha\phi_s` (Void,
     ExtrapolationLength) or :math:`\phi_s=0` (ZeroFlux, :math:`\alpha=\infty`), written to out. The one-node problem is
@@ -235,7 +253,7 @@ def boundary_coupling(out, mat, rhs, E, dim, cell, face, left, albedo, v, dc, ab
             rhs[row] = -albedo * flux[g]
     _add_node_rhs(
         rhs, (0, 1, 2), E, dim, axis, flux, absorb[cell], fission[cell], source[cell * E : cell * E + E], leak,
-        distances, cell, left, -1,
+        distances, cell, left, -1, left_albedo, albedo,
     )  # fmt: skip
     solve_in_place(mat, rhs, n)
     lc = 2 * distances[cell, 2 * axis]

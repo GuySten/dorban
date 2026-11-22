@@ -108,8 +108,16 @@ def compute_boundary_fluxes_using_nem(
     return (average_flux - a1 / 2 + a2 / 2), (average_flux + a1 / 2 + a2 / 2)
 
 
+def _fake_neighbor_leakage(neighbor, leakage, cell, cell_leakage):
+    if not isinstance(neighbor, Boundary):
+        return leakage[neighbor]
+    # the mirror image across a reflective boundary, albedo 0, as in dorban.nem.two_node._neighbor_leakage
+    reflective = getattr(neighbor, "albedo", None) == 0
+    return cell_leakage if reflective else -cell_leakage
+
+
 def compute_rdfs(system: Core, currents: np.array, k: float, fluxes: Optional[np.array] = None) -> np.array:
-    """
+    r"""
     Function to compute reference discontinuity factors (rdfs) of a two-dimensional cartesian system using the NEM approximation.
     Assuming the currents between any two cells in known and the k eigenvalue is also known.
     This function is useful to compute rdfs from a unit cell computation, if all the currents between the
@@ -134,13 +142,15 @@ def compute_rdfs(system: Core, currents: np.array, k: float, fluxes: Optional[np
     Returns
     -------
     np.array
-     Array of the reference discontinuity factors of each cell on each face.
+     Array of the reference discontinuity factors of each cell on each face: the inverse of the flux the
+     homogeneous NEM cell has on the face (the heterogeneous face flux is common to both sides of a face, so it
+     cancels in the flux continuity condition :math:`F_1\phi_1=F_2\phi_2` and is not needed).
     """
     leakage_x = currents[:, 1] - currents[:, 0]
     leakage_y = currents[:, 3] - currents[:, 2]
     leakages = {0: leakage_x, 1: leakage_y}
     C = system.geometry.cells
-    rdfs = np.zeros((C, 4, system.E))
+    face_flux = np.zeros((C, 4, system.E))  # flux of the homogeneous NEM cell on each face
     for (cell, neighbors), axis in product(enumerate(system.geometry.neighbors), [0, 1]):
         current_right = currents[cell, 2 * axis + 1]
         current_left = currents[cell, 2 * axis]
@@ -157,15 +167,13 @@ def compute_rdfs(system: Core, currents: np.array, k: float, fluxes: Optional[np
             else ll
         )
         transverse_l = 2 * system.geometry.distance_to_face(cell, 2 * (not axis))
-        transverse_left = (
-            leakages[not axis][n] if not isinstance(n := neighbors[2 * axis], Boundary) else transverse_leakage
-        )
-        transverse_right = (
-            leakages[not axis][n] if not isinstance(n := neighbors[2 * axis + 1], Boundary) else transverse_leakage
-        )
+        # across a boundary the fake neighbor of the NEM kernel (dorban.nem.two_node._neighbor_leakage): the
+        # mirror image (the cell's own leakage) across a reflector, minus the cell's own leakage otherwise
+        transverse_left = _fake_neighbor_leakage(neighbors[2 * axis], leakages[not axis], cell, transverse_leakage)
+        transverse_right = _fake_neighbor_leakage(neighbors[2 * axis + 1], leakages[not axis], cell, transverse_leakage)
         mat = system.isotopes[cell]
         if np.any(fluxes):
-            rdfs[cell, slice(2 * axis, 2 * axis + 2)] = compute_boundary_fluxes_using_nem(
+            face_flux[cell, slice(2 * axis, 2 * axis + 2)] = compute_boundary_fluxes_using_nem(
                 current_right,
                 current_left,
                 transverse_leakage,
@@ -180,7 +188,7 @@ def compute_rdfs(system: Core, currents: np.array, k: float, fluxes: Optional[np
                 fluxes[cell],
             )
         else:
-            rdfs[cell, slice(2 * axis, 2 * axis + 2)] = compute_boundary_fluxes_using_nem(
+            face_flux[cell, slice(2 * axis, 2 * axis + 2)] = compute_boundary_fluxes_using_nem(
                 current_right,
                 current_left,
                 transverse_leakage,
@@ -193,4 +201,4 @@ def compute_rdfs(system: Core, currents: np.array, k: float, fluxes: Optional[np
                 mat,
                 k,
             )
-    return rdfs
+    return 1.0 / face_flux
