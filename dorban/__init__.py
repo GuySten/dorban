@@ -29,6 +29,7 @@ from dorban.finite_differences.finite_difference_current_calculator import (
     DiscontinuityCurrentCalculator as DiscontinuityCurrentCalculator,
 )
 from dorban.geometry import (
+    AlbedoBoundary as AlbedoBoundary,
     Boundary as Boundary,
     Cartesian as Cartesian,
     FiniteGeometry as FiniteGeometry,

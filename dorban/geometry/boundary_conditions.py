@@ -3,7 +3,7 @@ This module contains classes representing different boundary conditions
 """
 
 from abc import ABCMeta, abstractmethod
-from typing import Sequence, Tuple
+from typing import Protocol, Sequence, Tuple
 
 import numpy as np
 
@@ -49,11 +49,38 @@ class Boundary(metaclass=ABCMeta):
         raise NotImplementedError
 
 
-class Reflector(Boundary):
+class AlbedoBoundary(Protocol):
+    r"""
+    Protocol of the boundary conditions of the form :math:`J=\alpha\phi_s`: the outgoing current through the face
+    is proportional to the flux :math:`\phi_s` at the face. Any boundary condition with a read-only ``albedo``, the
+    value of :math:`\alpha`, is one: it does not have to subclass this class, and an attribute is enough.
+
+    The albedo is part of the problem, not of the numerical method: 0 for a reflective boundary, 1/2 for vacuum in the
+    P1 approximation, infinity for zero flux. Every numerical method uses the same value, so a new boundary condition
+    of this kind only needs its albedo: finite differences and NEM both work from it. NEM accepts exactly these
+    boundary conditions. Subclasses, listed before :class:`Boundary`, get the finite differences coefficient from the
+    albedo.
+    """
+
+    @property
+    def albedo(self) -> float:
+        r"""The albedo :math:`\alpha` in :math:`J=\alpha\phi_s`, from 0 (reflective) to infinity (zero flux)."""
+        # a subclass that defines no albedo has none, rather than this protocol's empty body
+        raise AttributeError(f"{type(self).__name__} defines no albedo")
+
+    def compute_boundary_coefficient(
+        self, geometry, E, current_calc, cell: int, face: int
+    ) -> Tuple[np.array, np.array, np.array]:
+        return _albedo_boundary_coefficient(self.albedo, geometry, E, current_calc, cell, face)
+
+
+class Reflector(AlbedoBoundary, Boundary):
     r"""
     class representing reflective boundary condition. The equation it enforces
     is :math: `J=0` on the boundary.
     """
+
+    albedo = 0.0
 
     def __init__(self):
         super().__init__()
@@ -79,7 +106,7 @@ def _albedo_boundary_coefficient(albedo, geometry, E, current_calc, cell: int, f
     )
 
 
-class ExtrapolationLength(Boundary):
+class ExtrapolationLength(AlbedoBoundary, Boundary):
     r"""
     class representing void boundary condition using the extrapolated length
     approximation with the 0.4692 constant :math:`J=-0.4692\phi` at the boundary
@@ -90,28 +117,24 @@ class ExtrapolationLength(Boundary):
     def __init__(self):
         super().__init__()
 
-    def compute_boundary_coefficient(
-        self, geometry, E, current_calc, cell: int, face: int
-    ) -> Tuple[np.array, np.array, np.array]:
-        return _albedo_boundary_coefficient(self.constant, geometry, E, current_calc, cell, face)
+    @property
+    def albedo(self) -> float:
+        return self.constant
 
 
-class Void(Boundary):
+class Void(AlbedoBoundary, Boundary):
     r"""
     class representing void boundary condition based on the P1 approximation.
     The equation on the current is :math:`J=-\frac{1}{2}\phi` at the boundary
     """
 
+    albedo = 0.5
+
     def __init__(self):
         super().__init__()
 
-    def compute_boundary_coefficient(
-        self, geometry, E, current_calc, cell: int, face: int
-    ) -> Tuple[np.array, np.array, np.array]:
-        return _albedo_boundary_coefficient(0.5, geometry, E, current_calc, cell, face)
 
-
-class ZeroFlux(Boundary):
+class ZeroFlux(AlbedoBoundary, Boundary):
     r"""
     class representing zero flux at the boundary. The equation it enforces in
     the finite differences model is :math:`J=-\frac{D}{l}\phi`
@@ -119,6 +142,8 @@ class ZeroFlux(Boundary):
     and :math:`l` is the distance between the center of the cell closest to the
     boundary and the boundary itself.
     """
+
+    albedo = np.inf
 
     def __init__(self):
         super().__init__()

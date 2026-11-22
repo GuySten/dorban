@@ -14,7 +14,12 @@ from dorban.utils import op_face
 
 
 def diffusion_matrix(
-    neighbors: np.array, distances: np.array, surface_areas: np.array, E: int, current_calc: CMFDCurrentCalculator
+    neighbors: np.array,
+    distances: np.array,
+    surface_areas: np.array,
+    E: int,
+    current_calc: CMFDCurrentCalculator,
+    albedos: np.ndarray,
 ) -> spar.coo_matrix:
     r"""
     This function will generate a sparse matrix representing the diffusion
@@ -33,6 +38,8 @@ def diffusion_matrix(
      The number of energy groups.
     current_calc: CMFDCurrentCalculator
      The current calculator.
+    albedos: np.array
+     The albedo of each face, see :func:`dorban.nem.cmfd_iterator.boundary_albedos`.
 
     Returns
     -------
@@ -43,7 +50,7 @@ def diffusion_matrix(
 
     C = neighbors.shape[0]
     row_indices, col_indices, values = _diffusion_matrix(
-        neighbors, distances, surface_areas, E, current_calc.dc, current_calc.df, current_calc.coupling, C
+        neighbors, distances, surface_areas, E, current_calc.dc, current_calc.df, current_calc.coupling, C, albedos
     )
     return spar.coo_matrix(
         (np.hstack(values), (np.hstack(row_indices), np.hstack(col_indices))), shape=(E * C, E * C)
@@ -52,7 +59,7 @@ def diffusion_matrix(
 
 @numba.njit(cache=True)
 def _diffusion_matrix(
-    neighbors, distances, surface_areas, E: int, dc, df, coupling, C
+    neighbors, distances, surface_areas, E: int, dc, df, coupling, C, albedos
 ) -> tuple[list[np.array], list[np.array], list[np.array]]:
     row_indices = []
     col_indices = []
@@ -74,22 +81,22 @@ def _diffusion_matrix(
                     surface_areas[cell, j],
                     coupling[cell, j],
                 )
-            elif neighbor == -1:
+            elif np.isinf(albedos[cell, j]):
+                # zero flux at the boundary, the finite differences current is D * phi / (l / 2)
                 area = surface_areas[cell, j]
                 r, c, v = (
                     np.arange(cell * E, (cell + 1) * E),
                     np.arange(cell * E, (cell + 1) * E),
-                    coupling[cell, j] * area + np.full(E, area / 2),
-                )
-            elif neighbor == -2:
-                area = surface_areas[cell, j]
-                r, c, v = (
-                    np.arange(cell * E, (cell + 1) * E),
-                    np.arange(cell * E, (cell + 1) * E),
-                    coupling[cell, j] * area,
+                    (coupling[cell, j] + dc[cell] / distances[cell, j]) * area,
                 )
             else:
-                raise ValueError
+                # J = albedo * phi at the boundary; a reflective face, albedo 0, has only the coupling term
+                area = surface_areas[cell, j]
+                r, c, v = (
+                    np.arange(cell * E, (cell + 1) * E),
+                    np.arange(cell * E, (cell + 1) * E),
+                    coupling[cell, j] * area + np.full(E, albedos[cell, j] * area),
+                )
             row_indices.append(r)
             col_indices.append(c)
             values.append(v)
