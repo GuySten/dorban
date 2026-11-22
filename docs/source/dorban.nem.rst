@@ -53,10 +53,10 @@ Solve NEM
    :undoc-members:
    :show-inheritance:
 
-NEM utils
----------
+NEM two-node problems
+---------------------
 
-.. automodule:: dorban.nem.utils
+.. automodule:: dorban.nem.two_node
    :members:
    :undoc-members:
    :show-inheritance:
