@@ -23,8 +23,12 @@ import scipy.sparse as sparse
 import slepc4py.SLEPc as slepc
 
 _OPTIONS_PREFIX = "dorban_eps_"
-# below this number of unknowns the linear problems are solved directly, which is faster there than algebraic multigrid
-_DIRECT_SOLVE_SIZE = 20000
+# below this number of unknowns the linear problems are solved directly, which is faster there than algebraic
+# multigrid. Measured in three dimensions with 2, 4 and 7 groups, group by group multigrid was faster from about
+# 15,000 unknowns (7 groups: 0.12 s against 0.39 s), the two were within 0.05 s at 7,000 unknowns with 2 and 4 groups.
+_DIRECT_SOLVE_SIZE = 10000
+# problems whose cells have at most this many neighbors, two dimensional ones, are solved directly at any size
+_DIRECT_SOLVE_NEIGHBORS = 4
 
 
 @contextmanager
@@ -45,6 +49,20 @@ def _petsc_options(options: dict, prefix: str = _OPTIONS_PREFIX):
             database.delValue(name)
             if value is not None:
                 database[name] = value
+
+
+def spatial_neighbors(M: sparse.spmatrix, groups: int | None) -> int:
+    """
+    The largest number of neighbors of a cell in the matrix M, ordered by cell and then by energy group: the number
+    of off diagonal entries of a row in the same energy group. It is at most 2 in one dimension, 4 in two (3 for
+    triangles) and 6 in three (5 for triangular prisms). Every energy group has the same spatial coupling (neutrons
+    change group where they are), so the first group is counted.
+    """
+    groups = groups or 1
+    M = M.tocoo()
+    first_group = (M.row % groups == 0) & (M.col % groups == 0) & (M.row != M.col) & (M.data != 0)
+    counts = np.bincount(M.row[first_group] // groups, minlength=M.shape[0] // groups)
+    return int(counts.max()) if counts.size else 0
 
 
 def energy_group_blocks(M: sparse.spmatrix, groups: int) -> list[list[int]]:
@@ -91,9 +109,33 @@ def _explicit_options(eps_type: str, ksp_type: str | None, pc_type: str | None) 
     return options
 
 
-def _direct_solve_options() -> dict:
-    """LU factorization of M, applied once (preonly): an exact solve."""
-    return {"st_ksp_type": "preonly", "st_pc_type": "lu"}
+def _fieldsplit_options(blocks: list[list[int]], groups: int, outer_ksp_type: str) -> dict:
+    """A multiplicative fieldsplit (block Gauss-Seidel) over the blocks of energy groups, in their order."""
+    options = {
+        "st_ksp_type": outer_ksp_type,
+        "st_pc_type": "fieldsplit",
+        "st_pc_fieldsplit_type": "multiplicative",
+        "st_pc_fieldsplit_block_size": str(groups),
+    }
+    for i, block in enumerate(blocks):
+        options[f"st_pc_fieldsplit_{i}_fields"] = ",".join(map(str, block))
+    return options
+
+
+def _direct_solve_options(blocks: list[list[int]], groups: int) -> dict:
+    """
+    LU factorization of each block of energy groups, solved one block after the other in the order of
+    energy_group_blocks. Each block is solved exactly, so this is an exact solve (preonly), without an outer iteration.
+    The factors of the blocks have 1.5 to 2 times fewer nonzeros than those of all of M together, and the eigenvalue
+    solve was 1.6 to 6 times faster on the problems measured (ANL 2-A1, 7 groups, 114,000 unknowns: 2.35 s -> 1.36 s).
+    """
+    if len(blocks) == 1:
+        return {"st_ksp_type": "preonly", "st_pc_type": "lu"}
+    options = _fieldsplit_options(blocks, groups, "preonly")
+    for i in range(len(blocks)):
+        options[f"st_fieldsplit_{i}_ksp_type"] = "preonly"
+        options[f"st_fieldsplit_{i}_pc_type"] = "lu"
+    return options
 
 
 def _group_by_group_options(blocks: list[list[int]], groups: int, lin_rtol: float) -> dict:
@@ -102,14 +144,8 @@ def _group_by_group_options(blocks: list[list[int]], groups: int, lin_rtol: floa
     GMRES and algebraic multigrid. In the order of energy_group_blocks this is exact, but each block is solved
     iteratively, so the outer solve is flexible GMRES, and the blocks are solved more accurately than the outer solve.
     """
-    options = {
-        "st_ksp_type": "fgmres",
-        "st_pc_type": "fieldsplit",
-        "st_pc_fieldsplit_type": "multiplicative",
-        "st_pc_fieldsplit_block_size": str(groups),
-    }
-    for i, block in enumerate(blocks):
-        options[f"st_pc_fieldsplit_{i}_fields"] = ",".join(map(str, block))
+    options = _fieldsplit_options(blocks, groups, "fgmres")
+    for i in range(len(blocks)):
         options[f"st_fieldsplit_{i}_ksp_type"] = "gmres"
         options[f"st_fieldsplit_{i}_pc_type"] = "gamg"
         options[f"st_fieldsplit_{i}_ksp_rtol"] = str(lin_rtol / 100)
@@ -124,21 +160,28 @@ def linear_solve_options(
     the correction equation for Jacobi-Davidson. The first that applies of:
 
     1. the linear solver or preconditioner the user gave (ksp_type, pc_type),
-    2. a direct solve, for fewer than _DIRECT_SOLVE_SIZE unknowns,
+    2. a direct solve, block by block (_direct_solve_options), for fewer than _DIRECT_SOLVE_SIZE unknowns, or when no
+       cell has more than _DIRECT_SOLVE_NEIGHBORS neighbors (two dimensional problems),
     3. group by group (_group_by_group_options), when there are several energy groups and they are not all coupled
        by up-scatter,
     4. GMRES with algebraic multigrid, on all the energy groups at once.
 
     M is the matrix of the linear problems, numbered by cell and then by energy group (see energy_group_blocks).
+
+    A direct solve suits small problems and two dimensional ones, where the fill of the factors stays moderate: on two
+    dimensional problems of 80,000 to 456,000 unknowns it was 2 to 7 times faster than group by group multigrid
+    (ANL 2-A1, 456,000 unknowns: 13.6 s against 27.3 s), except on a 7 group problem with a block of 3 groups coupled by
+    up-scatter, where it took 1.6 s against 0.9 s. In three dimensions the fill grows fast (7 groups, 109,000
+    unknowns: 64 s against 1.1 s), so three dimensional problems are solved iteratively above _DIRECT_SOLVE_SIZE.
     """
     if eps_type == "gd" or ksp_type is not None or pc_type is not None:
         return _explicit_options(eps_type, ksp_type, pc_type)
-    if M.shape[0] < _DIRECT_SOLVE_SIZE:
-        return _direct_solve_options()
-    if groups is not None and groups > 1:
-        blocks = energy_group_blocks(M, groups)
-        if len(blocks) > 1:
-            return _group_by_group_options(blocks, groups, lin_rtol)
+    groups = groups or 1
+    blocks = energy_group_blocks(M, groups) if groups > 1 else [[0]]
+    if M.shape[0] < _DIRECT_SOLVE_SIZE or spatial_neighbors(M, groups) <= _DIRECT_SOLVE_NEIGHBORS:
+        return _direct_solve_options(blocks, groups)
+    if len(blocks) > 1:
+        return _group_by_group_options(blocks, groups, lin_rtol)
     return {"st_ksp_type": "gmres", "st_pc_type": "gamg"}
 
 
@@ -181,8 +224,9 @@ def generalized_eigenvalue_slepc(
      during the application of the eigenvalue solution
      algorithm, for a full list see the petsc manual,
      the useful ones are bcgsl, gmres, lgmres and preonly.
-     If neither lin_solver_name nor pc_name is given, a default is chosen: a direct solve (LU) for fewer than
-     20000 unknowns, otherwise see groups.
+     If neither lin_solver_name nor pc_name is given, a default is chosen: a direct solve (LU, one block of energy
+     groups at a time) for fewer than 10000 unknowns or when no cell has more than 4 neighbors (two dimensional
+     problems), otherwise see groups.
      With solver_name='gd' it must be None or preonly: Generalized Davidson only applies the preconditioner.
     pc_name: str
      the name of the preconditioner to use during the KSP application,
@@ -194,10 +238,11 @@ def generalized_eigenvalue_slepc(
      this way direct solvers can be used, for example with lin_solver_name=preonly and pc_name=lu
     groups: int | None
      The number of energy groups, when the unknowns are ordered by cell and then by energy group. It describes M
-     and does not choose a solver: lin_solver_name and pc_name, when given, take precedence over the default it
-     enables. For 20000 unknowns or more, that default solves the energy groups one after the other, with the groups coupled by up-scatter
-     together, each with algebraic multigrid (see energy_group_blocks). Without groups, GMRES with algebraic
-     multigrid is used.
+     and does not choose a solver: lin_solver_name and pc_name, when given, take precedence over the defaults it
+     enables. Those solve the energy groups one after the other, with the groups coupled by up-scatter together
+     (see energy_group_blocks): directly, or for three dimensional problems of 10000 unknowns or more with
+     algebraic multigrid. It is also needed to count the neighbors of the cells. Without groups, all the groups are
+     solved together, directly or with GMRES and algebraic multigrid.
 
     Returns
     -------
@@ -212,7 +257,7 @@ def generalized_eigenvalue_slepc(
         # petsc4py raises a PETSc error from a solve as a SystemError caused by it
         petsc_error = error if isinstance(error, petsc.Error) else error.__cause__
         chosen_by_user = solver_name == "gd" or lin_solver_name is not None or pc_name is not None
-        direct = _direct_solve_options()
+        direct = _direct_solve_options(energy_group_blocks(M, groups) if groups and groups > 1 else [[0]], groups or 1)
         if not isinstance(petsc_error, petsc.Error) or chosen_by_user or options == direct:
             raise
         # The setup of algebraic multigrid can break down: on a 2 x 2 problem, the short GMRES with which it

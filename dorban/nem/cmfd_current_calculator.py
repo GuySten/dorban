@@ -8,10 +8,8 @@ from typing import Optional, Sequence
 import numba
 import numpy as np
 
-from dorban.geometry.boundary_conditions import Boundary
-from dorban.geometry.geometry import FiniteGeometry
+from dorban.geometry.geometry import FiniteGeometry, faces_between_original_cells
 from dorban.system import IsotopeData
-from dorban.utils import op_face
 
 
 class CMFDCurrentCalculator:
@@ -55,46 +53,12 @@ class CMFDCurrentCalculator:
         self.coupling = coupling if coupling is not None else np.zeros((dc.shape[0], 2 * dim, self.E))
         self.df = df if df is not None else np.ones_like(self.coupling)
 
-    def compute_current_coefficients(
-        self, cell: int, neighbor: int, face: int, distances: np.array, surface_areas: np.array
-    ) -> tuple[np.array, np.array, np.array]:
+    def dc_on_face(self, cell: int, *_, **__) -> np.array:
         """
-        This method computes the coefficients in the diffusion matrix
-         that represents the current between a cell and its neighbor
-
-        Parameters
-        ----------
-        cell: int
-         the number of the cell
-        neighbor:int
-         the number of the neighbor
-        face: int
-         the number of the face between cell and neighbor
-        distances: np.array
-         array of shape cells*faces which contains the distances between the center of each cell to the boundaries.
-        surface_areas: np.array
-         array of shape cells*faces which contains the surface area of each face.
-
-        Returns
-        -------
-        Tuple[np.array, np.array, np.array]
-         tuple of the row indices in the diffusion matrix in which the coefficients
-         appear, the column indices in the diffusion matrix in which the coefficients
-         appear, the values of the diffusion matrix
+        The diffusion coefficients of the cell, which are the same across every face: see
+        :meth:`dorban.current_calculator.CurrentCalculator.dc_on_face` for the face and geometry it is given.
         """
-        return _compute(
-            cell,
-            self.E,
-            neighbor,
-            self.dc[cell],
-            self.dc[neighbor],
-            distances[cell, face],
-            distances[neighbor, face],
-            self.df[cell, face],
-            self.df[neighbor, op_face(face)],
-            surface_areas[cell, face],
-            self.coupling[cell, face],
-        )
+        return self.dc[cell]
 
     def mesh_refine(
         self,
@@ -122,16 +86,12 @@ class CMFDCurrentCalculator:
          new current calculator compatible with the refined geometry
         """
 
-        df = np.ones_like(geo.array_refine(self.df, split, axis=0))
-        coupling = np.zeros_like(geo.array_refine(self.coupling, split, axis=0))
-        assemblies = geo.array_refine(np.arange(0, stop=geo.cells), split).astype(int)
-        for cell, neighbors in enumerate(refgeo.neighbors):
-            for face, neighbor in enumerate(neighbors):
-                if not isinstance(neighbor, Boundary):
-                    if assemblies[cell] != assemblies[neighbor]:
-                        df[cell][face] = self.df[assemblies[cell]][face]
-                        coupling[cell][face] = self.coupling[assemblies[cell]][face]
-        return self.__class__(geo.array_refine(self.dc, split, axis=0), self.dim, coupling, df)
+        # the faces between the original cells keep their discontinuity factors and coupling coefficients
+        assemblies, across = faces_between_original_cells(geo, split, refgeo)
+        across = across[:, :, None]
+        df = np.where(across, self.df[assemblies], 1.0)
+        coupling = np.where(across, self.coupling[assemblies], 0.0)
+        return type(self)(geo.array_refine(self.dc, split, axis=0), self.dim, coupling, df)
 
     @classmethod
     def from_isotopes(cls, isotopes: IsotopeData, dim: int, transport: bool = False) -> "CMFDCurrentCalculator":

@@ -182,18 +182,8 @@ class GeneratorNemCMFD:
         self.core = core
         self.dim = core.geometry.dim
         self.current_calc: CMFDCurrentCalculator = core.current_calc  # type: ignore
-        self.distances = np.array(
-            [
-                [core.geometry.distance_to_face(cell, face) for face in range(2 * self.dim)]
-                for cell in range(core.geometry.cells)
-            ]
-        )
-        self.surface_areas = np.array(
-            [
-                [core.geometry.surface_area(cell, face) for face in range(2 * self.dim)]
-                for cell in range(core.geometry.cells)
-            ]
-        )
+        self.distances = core.geometry.face_distances()
+        self.surface_areas = core.geometry.face_areas()
         self.neighbors = change_neighbors(core.geometry.neighbors)
         self.albedos = boundary_albedos(core.geometry.neighbors)
         self.volumes = core.geometry.volumes
@@ -458,7 +448,7 @@ class GeneratorNemCMFDSource(GeneratorNemCMFD):
         return to_stop
 
 
-@numba.njit(cache=True)
+@numba.njit(cache=True, parallel=True)
 def update_coupling_coefficients(
     dim: int,
     mat_data: np.array,
@@ -510,7 +500,11 @@ def update_coupling_coefficients(
     E = mat_data.shape[2]
     ns = other_axi
     leak = leakage(neighbors_array, distances, surface_areas, dc, df, coupling, E, v, dim, albedos)
-    for cell, neighbors in enumerate(neighbors_array):
+    # the cells are independent: each face between two cells is computed once, by the cell on its left, which
+    # writes the coefficient of both sides, and the other faces only by their cell
+    for index in numba.prange(neighbors_array.shape[0]):
+        cell = np.int64(index)  # the parallel loop index is unsigned; a signed one keeps cell and neighbors alike
+        neighbors = neighbors_array[cell]
         for face, neighbor in enumerate(neighbors):
             axis = face // 2
             t_axi = ns(axis, dim)

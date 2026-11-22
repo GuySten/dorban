@@ -76,7 +76,12 @@ def block_values(
         values of the callable material_matrix on each of the CrossSectionsData in
         isotopes
     """
-    return np.hstack([material_matrix(isotope).flatten() for isotope in isotopes])
+    # cells usually share a few materials: compute each material's block once
+    first = {}
+    index = np.array([first.setdefault(id(isotope), len(first)) for isotope in isotopes], dtype=int)
+    unique = {id(isotope): isotope for isotope in isotopes}
+    blocks = np.array([material_matrix(isotope).flatten() for isotope in unique.values()])
+    return blocks[index].ravel()
 
 
 def sigma_a(system: Core) -> spar.csr_matrix:

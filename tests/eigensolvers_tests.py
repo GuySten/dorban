@@ -207,3 +207,19 @@ def test_slepc_raises_when_the_linear_solver_given_fails():
     A, M = _slab_matrices(DOWN_SCATTER, cells=20)
     with pytest.raises((petsc.Error, SystemError)):
         generalized_eigenvalue_slepc(A, M, groups=4, pc_name="no_such_preconditioner")
+
+
+@pytest.mark.parametrize("scatter", [DOWN_SCATTER, UP_SCATTER], ids=["down-scatter", "up-scatter"])
+@pytest.mark.parametrize("adjoint", [False, True])
+def test_direct_solve_by_blocks_finds_the_eigenvalue(scatter, adjoint):
+    # small problems are factored one block of energy groups at a time; without an outer Krylov solve to correct it,
+    # the eigenvalue is right only if the blocks are solved in the right order
+    A, M = _slab_matrices(scatter)
+    if adjoint:
+        A, M = A.T.tocsr(), M.T.tocsr()
+    options = linear_solve_options("krylovschur", None, None, 4, 1e-12, M)
+    assert (options["st_ksp_type"], options["st_pc_type"]) == ("preonly", "fieldsplit")
+    assert all(options[f"st_fieldsplit_{i}_pc_type"] == "lu" for i in range(len(energy_group_blocks(M, 4))))
+    exact = np.max(np.abs(scipy.linalg.eigvals(A.toarray(), M.toarray())))
+    k, _ = generalized_eigenvalue_slepc(A, M, groups=4)
+    assert k == pytest.approx(exact, rel=1e-9)

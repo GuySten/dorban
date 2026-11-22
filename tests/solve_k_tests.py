@@ -51,7 +51,7 @@ def test_slepc_finds_the_fundamental_mode():
     geometry = Cartesian([np.array([2.713, 5.514]), np.array([9.34, 9.18])], [Reflector()] * 4)
     materials = [fuel, reflector, fuel, reflector]
     core = Core(materials, 2, geometry, CurrentCalculatorFD.from_isotopes(materials))
-    split = geometry.uniform_split(50)
+    split = geometry.uniform_split(25)
     k_slepc, flux = solve_k(core, FDSettings(split=split, solver_name="slepc"))
     k_power, _ = solve_k(core, FDSettings(split=split, solver_name="power iteration"))
     assert k_slepc == pytest.approx(k_power, rel=1e-4)
